@@ -18,6 +18,7 @@ list together with plots for visual inspection.
 
 ClearAll[
   allAnalysis, runSingleImageAnalysis, listPixelsToum, pointsPixelsToum,
+  displaySingleImageAnalysisResult, runAndDisplaySingleImageAnalysis,
   analysisOutputColumns, xTicks, yTicks, commonStyle,
   pixelsize, backgroundSeprationFactor, smallNoiseComponentSize,
   boundaryDilation, peakIntensityThreasholdFactor, peakRatioThreashold,
@@ -451,27 +452,72 @@ totalIntensity
 
 
 (* ::Section:: *)
+(* Interactive Output *)
+
+
+(* Displays the metric table and inspection plots returned by allAnalysis. *)
+displaySingleImageAnalysisResult[result_] := Module[
+  {metrics, plotList, metricValues, metricTable, plotPanel},
+  If[MemberQ[{$Canceled, $Failed}, result], Return[result]];
+  If[!ListQ[result] || Length[result] < 1, Return[$Failed]];
+
+  metrics = First[result];
+  If[!ListQ[metrics], Return[$Failed]];
+
+  plotList = If[Length[result] >= 2 && ListQ[result[[2]]], result[[2]], {}];
+  metricValues = Take[
+    PadRight[metrics, Length[analysisOutputColumns], "NA"],
+    Length[analysisOutputColumns]
+  ];
+
+  metricTable = Grid[
+    Prepend[Transpose[{analysisOutputColumns, metricValues}], {"Metric", "Value"}],
+    Frame -> All,
+    Alignment -> Left
+  ];
+
+  plotPanel = If[
+    Length[plotList] > 0,
+    Column[plotList, Spacings -> 1],
+    Style["No inspection plots returned.", Italic, Gray]
+  ];
+
+  Column[
+    {
+      Style["Measurements", Bold, 14],
+      metricTable,
+      Style["Inspection plots", Bold, 14],
+      plotPanel
+    },
+    Spacings -> 1.2
+  ]
+];
+
+
+(* Selects one image and displays the analysis output. *)
+runAndDisplaySingleImageAnalysis[file_: Automatic, cropFraction_: 1(*This is for the black edge from rotation, if there is no black edge, please keep it as 1, otherwise chose any positive number less than 1*)] :=
+  displaySingleImageAnalysisResult[runSingleImageAnalysis[file, cropFraction]];
+
+
+
+(* ::Section:: *)
 (* Usage *)
 
 
 (*
 Choose an image interactively:
 
-  result = runSingleImageAnalysis[];
+  runAndDisplaySingleImageAnalysis[];
 
 Use an explicit file path for a reproducible run:
 
-  result = runSingleImageAnalysis["C:\\path\\to\\image.tif"];
+  runAndDisplaySingleImageAnalysis["C:\\path\\to\\image.tif"];
 
 Use a different centered crop fraction if needed:
 
-  result = runSingleImageAnalysis[Automatic, 0.8];
+  runAndDisplaySingleImageAnalysis[Automatic, 0.8];
 
-View the metric table after a successful run:
+Store the raw result object if needed:
 
-  Grid[Prepend[Transpose[{analysisOutputColumns, result[[1]]}], {"Metric", "Value"}], Frame -> All]
-
-View the inspection plots:
-
-  result[[2]]
+  result = runSingleImageAnalysis[];
 *)
