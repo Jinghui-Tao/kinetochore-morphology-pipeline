@@ -362,7 +362,7 @@ resolvePairTrackIDs[pairLabels_, labelToID_, groupedTracks_] := Module[
 ];
 
 
-(* Compact per-pair diagnostic: this is safe to paste into Codex/ChatGPT. *)
+(* Compact per-pair diagnostic for error detection if happened*)
 pairMetricStatus[result_, pairLabels_, labelToID_, groupedTracks_] := Module[
   {labels, ids, trackA, trackB, framesA, framesB, overlap, resultType, failureTag, failureInfo, resultHead},
 
