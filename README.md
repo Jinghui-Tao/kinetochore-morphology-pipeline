@@ -52,16 +52,20 @@ Folder names may vary, but the scripts rely on `export.csv`, `pairs.xlsx`, chann
 Use this step after TrackMate tracking and sister-pair curation.
 
 ```wl
-Get["C:\\path\\to\\KKCalculationAndRotation.wl"];
+script = SystemDialogInput["FileOpen", WindowTitle -> "Select KKCalculationAndRotation.wl"];
+root = SystemDialogInput["Directory", WindowTitle -> "Select the experiment root folder"];
 
-runKKCalculationAndRotation[
-  "C:\\path\\to\\experiment_root",
-  "ChannelCount" -> 2,
-  "RunRotation" -> True,
-  "ImageChannel" -> 1,
-  "CropFraction" -> 0.7,
-  "Parallel" -> True,
-  "Kernels" -> 4
+If[script =!= $Canceled && root =!= $Canceled,
+  Get[script];
+  runKKCalculationAndRotation[
+    root,
+    "ChannelCount" -> 2,
+    "RunRotation" -> True,
+    "ImageChannel" -> 1,
+    "CropFraction" -> 0.7,
+    "Parallel" -> True,
+    "Kernels" -> 4
+  ]
 ]
 ```
 
@@ -82,9 +86,11 @@ Important outputs include:
 Before running a large batch, inspect representative images.
 
 ```wl
-Get["C:\\path\\to\\singleImageAnalysis.wl"];
-
-runAndDisplaySingleImageAnalysis[]
+script = SystemDialogInput["FileOpen", WindowTitle -> "Select singleImageAnalysis.wl"];
+If[script =!= $Canceled,
+  Get[script];
+  runAndDisplaySingleImageAnalysis[]
+]
 ```
 
 Select one KT image when prompted. Use the inspection plots to confirm:
@@ -99,15 +105,19 @@ Select one KT image when prompted. Use the inspection plots to confirm:
 ### 3. Run Batch KT Image Analysis
 
 ```wl
-Get["C:\\path\\to\\mainprogram.wl"];
+script = SystemDialogInput["FileOpen", WindowTitle -> "Select mainprogram.wl"];
+root = SystemDialogInput["Directory", WindowTitle -> "Select the experiment root folder"];
 
-batch = runMainBatchAnalysis[
-  "C:\\path\\to\\experiment_root",
-  "Kernels" -> 4,
-  "ChunkSize" -> Automatic,
-  "Resume" -> True,
-  "ExportPlots" -> True
-];
+If[script =!= $Canceled && root =!= $Canceled,
+  Get[script];
+  batch = runMainBatchAnalysis[
+    root,
+    "Kernels" -> 4,
+    "ChunkSize" -> Automatic,
+    "Resume" -> True,
+    "ExportPlots" -> True
+  ];
+]
 ```
 
 The batch runner searches for `(+-1)` folders, analyzes each KT image sequence, and writes per-KT CSVs plus inspection images. With `"Resume" -> True`, completed KT folders are stored in `finished.csv` and skipped in later runs.
@@ -115,10 +125,11 @@ The batch runner searches for `(+-1)` folders, analyzes each KT image sequence, 
 ### 4. Extract Experiment-Level Results
 
 ```wl
-Get["C:\\path\\to\\result_extract.wl"];
+script = SystemDialogInput["FileOpen", WindowTitle -> "Select result_extract.wl"];
+If[script =!= $Canceled, Get[script]];
 ```
 
-The script asks for channel number and the root folder. It then combines per-KT measurements with K-K distance, movement metrics, Ch1/Ch2 tables, and overlap filtering.
+Set `configuredChannelNumber` in `result_extract.wl` before running. The script asks for the root folder, then combines per-KT measurements with K-K distance, movement metrics, Ch1/Ch2 tables, and overlap filtering.
 
 Main outputs:
 
