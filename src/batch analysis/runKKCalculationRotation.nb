@@ -1,0 +1,69 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[      2059,         61]
+NotebookOptionsPosition[      1699,         47]
+NotebookOutlinePosition[      2103,         63]
+CellTagsIndexPosition[      2060,         60]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell[BoxData[{
+ RowBox[{
+  RowBox[{
+   RowBox[{"Get", "[", 
+    RowBox[{"SystemDialogInput", "[", "\"\<FileOpen\>\"", "]"}], "]"}], ";"}], 
+  RowBox[{"(*", 
+   RowBox[{
+    RowBox[{"select", " ", "the", " ", 
+     RowBox[{"mainprogram", ".", "wl"}], " ", "first"}], ",", " ", 
+    RowBox[{
+    "then", " ", "select", " ", "the", " ", "folder", " ", "contains", " ", 
+     "all", " ", "cells", " ", "and", " ", "files", " ", "inside", " ", 
+     "named", " ", "propreply"}]}], "*)"}]}], "\[IndentingNewLine]", 
+ RowBox[{"runKKCalculationAndRotation", "[", 
+  RowBox[{
+   RowBox[{"SystemDialogInput", "[", 
+    RowBox[{"\"\<Directory\>\"", ",", " ", 
+     RowBox[{
+     "WindowTitle", " ", "->", 
+      " ", "\"\<Select the folder containing all cells\>\""}]}], "]"}], ",", 
+   RowBox[{"\"\<ChannelCount\>\"", "->", "2"}], ",", 
+   RowBox[{"\"\<RunRotation\>\"", "->", "True"}]}], "]"}]}], "Input",
+ CellChangeTimes->{{3.98943098466436*^9, 3.9894310180649033`*^9}, 
+   3.989431116123369*^9, {3.989431402448591*^9, 3.9894314191785774`*^9}, 
+   3.989431624288683*^9},
+ CellLabel->"In[1]:=",ExpressionUUID->"18ae60e8-3c8b-c641-bba0-0433cece7148"]
+},
+WindowSize->{1428, 729.75},
+WindowMargins->{{1228.8, Automatic}, {Automatic, 0}},
+FrontEndVersion->"14.3 for Microsoft Windows (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"3f6f7a1d-02bc-2e49-92fa-8a9e99b5d17b"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 1141, 25, 47, "Input",ExpressionUUID->"18ae60e8-3c8b-c641-bba0-0433cece7148"]
+}
+]
+*)
+
