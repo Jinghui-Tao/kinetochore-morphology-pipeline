@@ -9,7 +9,8 @@
 (*
 Purpose
   Combine per-kinetochore analysis CSV files, TrackMate exports, sister-pair
-  metadata, movement summaries, and merged-window preselection output.
+  metadata, movement summaries, and target/background KT signal overlap
+  preselection output.
 
 *)
 
@@ -37,18 +38,18 @@ ClearAll[
   znccPreviewTimeoutSeconds,
   closeLaunchedParallelKernels, withManagedParallelKernels,
   makeUniqueHeaders, tableRowsToAssociations, displayTablePreview,
-  rowCount, compiledResultTable, mergedWindowInspectionTable, matchValueQ,
+  rowCount, compiledResultTable, ktOverlapInspectionTable, matchValueQ,
   rowValueByHeader, metadataRowMatchQ, selectCompiledRowsByMetadata,
   channelRegistrationTable,
-  mergedWindowCandidateRows, mergedWindowInspectionScore, sortedMergedWindowInspectionRows,
+  ktOverlapCandidateRows, ktOverlapInspectionScore, sortedKTOverlapInspectionRows,
   ktAllInOnePlotPath, ktOriginalImagePath, plotImageCell,
   channelOverlayImageCell,
   fitZNCCForRow, znccFittingVectorUm, appendZNCCFittingColumns,
   compiledResultsBase, compiledResultsWithZNCC,
   measurementAssociation, displayIntermediateAnalysisRows,
   displayIntermediateAnalysisPreview, displayIntermediateAnalysisAt,
-  displayIntermediateAnalysisSelector, displayMergedWindowInspectionPreview,
-  displayMergedWindowCandidatePreview,
+  displayIntermediateAnalysisSelector, displayKTOverlapInspectionPreview,
+  displayKTOverlapCandidatePreview,
   displayResultExtractionReport,
   displayZNCCChannelRegistrationPreview,
   displayZNCCChannelRegistrationControl
@@ -245,7 +246,7 @@ widthXSlope[data_, occurrence_] := Module[{pairs},
 
 (*
 The workflow extracts individually analyzed kinetochore data, movement metrics,
-and merged-window inspection tables.
+and target/background KT-overlap inspection tables.
 *)
 (*
 Tunable parameters:
@@ -253,27 +254,26 @@ Tunable parameters:
 configuredChannelNumber = 2;
 (* User setting. Supported values:
    1 -> single-channel dataset; runs Ch1 extraction, movement summaries, and
-        Ch1 merged-window filtering.
-   2 -> double-channel dataset; additionally enables Ch1/Ch2 vector or
-        registration export tables. *)
+        Ch1 target/background KT signal overlap filtering.
+   2 -> double-channel dataset; additionally enables Ch1/Ch2 vector fitting. *)
 
 windowSize = 6;
 (* Frames. Window length for short-term SD analysis. Use an integer. *)
 
 overlapSeparationIntensityThreshold = 1.7;
-(* Total-intensity threshold for merged-window preselection. Lower values detect
-   more possible merged windows but may increase false positives. Recommended
-   default: 1.7. *)
+(* Total-intensity threshold for target/background KT signal overlap
+   preselection. Lower values detect more possible overlap frames but may
+   increase false positives. Recommended default: 1.7. *)
 
 overlapSeparationPixelThreshold = 60;
-(* Pixel-area threshold for merged-window preselection. Lower values detect more
-   possible merged windows but may increase false positives. Tune for movie
-   pixel size. *)
+(* Pixel-area threshold for target/background KT signal overlap preselection.
+   Lower values detect more possible overlap frames but may increase false
+   positives. Tune for movie pixel size. *)
 
 exportZNCCFittingResults = True;
 (* When True, compute and export Ch1/Ch2 ZNCC fitting vector columns in the
-   compiled results table. This registration is independent from merged-window
-   filtering. *)
+   compiled results table. This calculation does not read, write, filter by,
+   or depend on the KT-overlap PreSelect flag. *)
 
 znccPixelSizeUm = 0.046*2;
 (* Micrometers per camera pixel after acquisition binning. This matches the
@@ -1023,18 +1023,18 @@ normalizedMovementExport = safeExportCSV[FileNameJoin[{DirectoryName[movementExp
 
 
 (* ::Section:: *)
-(* Channel Registration and Merged-Window Filtering *)
+(* Ch1/Ch2 Channel Registration *)
 
 
 (*
-Defines the Ch1/Ch2 registration utilities used for protein-label displacement
-fitting and the single-channel intensity/area tables used to inspect possible
-merged-window kinetochore detections.
+Defines the Ch1/Ch2 ZNCC fitting utilities used for protein-label displacement
+measurements. This two-channel vector fitting is separate from KT-overlap
+inspection and does not use PreSelect.
 *)
 
 
 (* ::Subsection:: *)
-(* Ch1/Ch2 Shift Fitting *)
+(* ZNCC Shift Fitting *)
 
 
 (*
@@ -1190,8 +1190,19 @@ outputs = {
 };
 
 
+(* ::Section:: *)
+(* Target/Background KT Signal Overlap Filtering *)
+
+
+(*
+Single-channel intensity/area QC for frames where background or neighboring
+kinetochore signal overlaps the target KT signal. This filter does not use
+Ch1/Ch2 ZNCC fitting.
+*)
+
+
 (* ::Subsection:: *)
-(* Merged-Window Candidate Table *)
+(* KT-Signal Overlap Candidate Table *)
 
 
 inspectionDataPath=outputs[[1]];
@@ -1200,7 +1211,7 @@ inspectionDataPath=outputs[[1]];
 inspectionData=Select[ktDataCollectionExport[[1]],#=!=Null&&Length[#]==Commonest[Length/@ktDataCollectionExport[[1]]][[1]]&];
 
 
-markData=Transpose[Join[Transpose[inspectionData],{Join[{"select"},ConstantArray[0,Length[inspectionData]-1]]}]]; (*Initialize merged-window inspection mark.*)
+markData=Transpose[Join[Transpose[inspectionData],{Join[{"select"},ConstantArray[0,Length[inspectionData]-1]]}]]; (* Initialize KT-overlap inspection mark. *)
 
 
 markData[[1]][[-1]]="Inspection mark";
@@ -1219,11 +1230,11 @@ markDataSet=Join[{markData[[1]]},ReverseSortBy[markData[[Range[2,markDataLength]
 
 
 (* ::Subsection:: *)
-(* Kinetochore Merged-Window Detection *)
+(* Target/Background KT Signal Overlap Detection *)
 
 
-(* Detect frames where two kinetochores are likely merged into one detection
-   window by clustering total intensity and comparing detected object area. *)
+(* Detect frames where background or neighboring kinetochore signal overlaps the
+   target KT signal by clustering total intensity and comparing object area. *)
 clusterKTIntensity[singleKTDataset_]:=Module[{ch1data,ch2data,clustersCh1,clustersCh2,ch1ClustersMean,ch2ClustersMean,ch1SeparationRate,ch2SeparationRate,dataClustersCh1Ch2,ch1Classifier,ch2Classifier,ch1SortedDataWithLabels,ch1FirstLabel,ch1LabelMap,ch1TransformedLabels,ch2SortedDataWithLabels,ch2FirstLabel,ch2LabelMap,ch2TransformedLabels,ch1Labels,ch2Labels,ch1ktArea,ch2ktArea,ch1ktAreaGroup1,ch1ktAreaGroup2,ch2ktAreaGroup1,ch2ktAreaGroup2,ch1ktAreaGroup1Mean,ch1ktAreaGroup2Mean,ch2ktAreaGroup1Mean,ch2ktAreaGroup2Mean,ch1IndexGroup1,ch1IndexGroup2,ch2IndexGroup1,ch2IndexGroup2,data,emptyClusterResult},
 
 data=Cases[toNumericOrMissing /@ Transpose[singleKTDataset][[1]], _?NumericQ];
@@ -1319,7 +1330,7 @@ clusterKTIntensityJoinKTDataset[singleKTDataset_]:=Map[Catenate,Transpose[{singl
 markDataSetNormalizedTotIntensitySorted=Join[{Join[markData[[1]],{"ch1IntensitySeparationRate","ch1Classifier","ch1AreaSeparationRate","ch1Group2AreaMean","ch2IntensitySeparationRate","ch2Classifier","ch2AreaSeparationRate","ch2Group2AreaMean"}]},SortBy[Flatten[Map[clusterKTIntensityJoinKTDataset,GatherBy[Drop[markDataSet,1],#[[Range[5]]]&]],1],#[[{1,2,3,4,5}]]&]];
 
 
-(* Mark likely merged-window frames when:
+(* Mark likely target/background KT signal overlap frames when:
    - the frame belongs to the high-intensity cluster,
    - the high/low intensity ratio exceeds the configured threshold, and
    - the detected pixel area exceeds the configured threshold.
@@ -1334,15 +1345,15 @@ outputPreSelect = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"]
 outputFiltered = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "allKT_filtered.csv"}], Select[markDataSetNormalizedTotIntensitySortedIntensityPreSelect, #[[-1]] != 1&]]};
 
 If[doubleChannelEnabled,
-displayDataWithMergedWindowFlags = markDataSetNormalizedTotIntensitySortedIntensityPreSelect;
+displayDataWithKTOverlapFlags = markDataSetNormalizedTotIntensitySortedIntensityPreSelect;
 
-outputPreSelectMergedWindowInspection = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "extract_PreSelectMark.csv"}], displayDataWithMergedWindowFlags]};
+outputPreSelectKTOverlapInspection = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "extract_PreSelectMark.csv"}], displayDataWithKTOverlapFlags]};
 
-outputFilteredMergedWindowInspection = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "extract_filtered.csv"}], Select[displayDataWithMergedWindowFlags, #[[-1]] != 1&]]};
+outputFilteredKTOverlapInspection = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "extract_filtered.csv"}], Select[displayDataWithKTOverlapFlags, #[[-1]] != 1&]]};
 ,
-displayDataWithMergedWindowFlags = {};
-outputPreSelectMergedWindowInspection = {};
-outputFilteredMergedWindowInspection = {};
+displayDataWithKTOverlapFlags = {};
+outputPreSelectKTOverlapInspection = {};
+outputFilteredKTOverlapInspection = {};
 ];
 
 
@@ -1355,8 +1366,8 @@ workflowSummary = <|
     normalizedMovementExport,
     outputPreSelect,
     outputFiltered,
-    outputPreSelectMergedWindowInspection,
-    outputFilteredMergedWindowInspection
+    outputPreSelectKTOverlapInspection,
+    outputFilteredKTOverlapInspection
   }
 |>;
 
@@ -1410,7 +1421,7 @@ compiledResultTable[] := Which[
 ];
 
 
-mergedWindowInspectionTable[] := If[
+ktOverlapInspectionTable[] := If[
   ValueQ[markDataSetNormalizedTotIntensitySortedIntensityPreSelect] &&
     ListQ[markDataSetNormalizedTotIntensitySortedIntensityPreSelect],
   markDataSetNormalizedTotIntensitySortedIntensityPreSelect,
@@ -1457,8 +1468,8 @@ selectCompiledRowsByMetadata[cellIndex_, ktPair_, kt_: All, time_: All] := Modul
 ];
 
 
-mergedWindowCandidateRows[] := Module[{data, headers, col},
-  data = mergedWindowInspectionTable[];
+ktOverlapCandidateRows[] := Module[{data, headers, col},
+  data = ktOverlapInspectionTable[];
   If[Length[data] < 2, Return[{}]];
   headers = First[data];
   col = Flatten@Position[headers, "PreSelect"];
@@ -1471,7 +1482,7 @@ mergedWindowCandidateRows[] := Module[{data, headers, col},
 ];
 
 
-mergedWindowInspectionScore[headers_List, row_List] := Max[
+ktOverlapInspectionScore[headers_List, row_List] := Max[
   Cases[
     {
       toNumericOrMissing[rowValueByHeader[headers, row, {"ch1IntensitySeparationRate"}]]/
@@ -1488,12 +1499,12 @@ mergedWindowInspectionScore[headers_List, row_List] := Max[
 ];
 
 
-sortedMergedWindowInspectionRows[] := Module[{data, headers, rows},
-  data = mergedWindowInspectionTable[];
+sortedKTOverlapInspectionRows[] := Module[{data, headers, rows},
+  data = ktOverlapInspectionTable[];
   If[Length[data] < 2, Return[{}]]; 
   headers = First[data];
   rows = Rest[data];
-  ReverseSortBy[rows, mergedWindowInspectionScore[headers, #]&]
+  ReverseSortBy[rows, ktOverlapInspectionScore[headers, #]&]
 ];
 
 ktAllInOnePlotPath[ktdatapath_String, index_?NumericQ] := FileNameJoin[
@@ -1694,34 +1705,34 @@ displayIntermediateAnalysisSelector[] := DynamicModule[
 ];
 
 
-displayMergedWindowInspectionPreview[maxRows_: 1] := Module[{data, rows},
-  data = mergedWindowInspectionTable[];
-  rows = sortedMergedWindowInspectionRows[];
+displayKTOverlapInspectionPreview[maxRows_: 1] := Module[{data, rows},
+  data = ktOverlapInspectionTable[];
+  rows = sortedKTOverlapInspectionRows[];
   If[
     Length[data] < 1 || Length[rows] == 0,
-    Style["No merged-window inspection rows are available.", Italic, Gray],
+    Style["No KT-overlap inspection rows are available.", Italic, Gray],
     displayIntermediateAnalysisRows[
       Join[{First[data]}, Take[rows, UpTo[maxRows]]],
       maxRows,
-      "Merged-window inspection"
+      "KT-overlap inspection"
     ]
   ]
 ];
 
 
-displayMergedWindowCandidatePreview[maxRows_: 1] := Module[{data, candidates},
-  data = mergedWindowInspectionTable[];
-  candidates = mergedWindowCandidateRows[];
+displayKTOverlapCandidatePreview[maxRows_: 1] := Module[{data, candidates},
+  data = ktOverlapInspectionTable[];
+  candidates = ktOverlapCandidateRows[];
   If[
     Length[data] < 1,
-    Style["No merged-window inspection rows are available.", Italic, Gray],
+    Style["No KT-overlap inspection rows are available.", Italic, Gray],
     If[
       Length[candidates] == 0,
-      displayMergedWindowInspectionPreview[maxRows],
+      displayKTOverlapInspectionPreview[maxRows],
       displayIntermediateAnalysisRows[
         Join[{First[data]}, Take[candidates, UpTo[maxRows]]],
         maxRows,
-        "Merged-window example"
+        "KT-overlap example"
       ]
     ]
   ]
@@ -1729,7 +1740,7 @@ displayMergedWindowCandidatePreview[maxRows_: 1] := Module[{data, candidates},
 
 displayResultExtractionReport[maxRows_: 50, previewRows_: 4, includeZNCCPreview_: True] := Module[
   {
-    compiledTable, movementTable, normalizedTable, mergedWindowTable, registrationTable,
+    compiledTable, movementTable, normalizedTable, ktOverlapTable, registrationTable,
     candidates, outputRows, overview
   },
   compiledTable = compiledResultTable[];
@@ -1739,9 +1750,9 @@ displayResultExtractionReport[maxRows_: 50, previewRows_: 4, includeZNCCPreview_
     normalizedExtractData,
     {}
   ];
-  mergedWindowTable = mergedWindowInspectionTable[];
+  ktOverlapTable = ktOverlapInspectionTable[];
   registrationTable = channelRegistrationTable[];
-  candidates = mergedWindowCandidateRows[];
+  candidates = ktOverlapCandidateRows[];
   outputRows = If[
     ValueQ[workflowSummary] && AssociationQ[workflowSummary],
     Cases[Flatten[Lookup[workflowSummary, "Outputs", {}]], _String],
@@ -1753,8 +1764,8 @@ displayResultExtractionReport[maxRows_: 50, previewRows_: 4, includeZNCCPreview_
       "Compiled rows" -> rowCount[compiledTable],
       "Movement rows" -> rowCount[movementTable],
       "Normalized rows" -> rowCount[normalizedTable],
-      "Merged-window inspection rows" -> rowCount[mergedWindowTable],
-      "Preselected merged-window candidates" -> Length[candidates],
+      "KT-overlap inspection rows" -> rowCount[ktOverlapTable],
+      "Preselected KT-overlap candidates" -> Length[candidates],
       "Ch1/Ch2 registration rows" -> rowCount[registrationTable],
       "Warnings" -> If[ValueQ[workflowWarnings], Length[workflowWarnings], 0],
       "Errors" -> If[ValueQ[workflowErrors], Length[workflowErrors], 0]
@@ -1783,8 +1794,8 @@ displayResultExtractionReport[maxRows_: 50, previewRows_: 4, includeZNCCPreview_
       displayTablePreview[movementTable, maxRows],
       Style["Normalized movement summary", Bold, 14],
       displayTablePreview[normalizedTable, maxRows],
-      Style["Merged-window inspection table", Bold, 14],
-      displayTablePreview[mergedWindowTable, maxRows],
+      Style["KT-overlap inspection table", Bold, 14],
+      displayTablePreview[ktOverlapTable, maxRows],
       Style["Warnings", Bold, 14],
       If[ValueQ[workflowWarnings] && workflowWarnings =!= {}, Dataset[workflowWarnings], "None"],
       Style["Errors", Bold, 14],
@@ -1958,9 +1969,10 @@ Before running, tune these values in Workflow Configuration when needed:
   closeLaunchedParallelKernels
 
 Set configuredChannelNumber = 1 for single-channel datasets. Single-channel
-mode runs Ch1 extraction, movement summaries, and merged-window filtering, then
-skips Ch1/Ch2 vector or registration export tables. Set configuredChannelNumber
-= 2 for double-channel datasets.
+mode runs Ch1 extraction, movement summaries, and target/background KT signal
+overlap filtering, then
+skips Ch1/Ch2 ZNCC vector fitting. Set configuredChannelNumber = 2 for
+double-channel datasets.
 
 After running, inspect workflowSummary, workflowWarnings, and workflowErrors for
 output paths, recoverable warnings, and failed imports/exports.
@@ -1970,8 +1982,8 @@ For notebook review, run:
   displayResultExtractionReport[]
 
 The report shows compiled result tables, a compiled-row Ch1/Ch2 ZNCC fitting
-panel, movement tables, normalized movement tables, and the merged-window
-inspection table.
+panel, movement tables, normalized movement tables, and the KT-overlap
+inspection table. The ZNCC panel and the KT-overlap table are separate outputs.
 
 The report includes a Ch1/Ch2 ZNCC fitting check panel. Enter row index,
 maxShift, and blurSigma, then click Check to visually inspect a selected
@@ -1991,8 +2003,8 @@ For an input panel, run:
 
 Use the Ch1/Ch2 ZNCC registration check panel in displayResultExtractionReport[]
 for selected double-channel rows. Enter row index, maxShift, and blurSigma, then
-click Check. Ch1/Ch2 registration is independent from the merged-window
-PreSelect flag.
+click Check. Ch1/Ch2 registration does not use the target/background KT signal
+overlap PreSelect flag.
 
 Width headers from old CSV files are normalized during column lookup, and
 exported files use:

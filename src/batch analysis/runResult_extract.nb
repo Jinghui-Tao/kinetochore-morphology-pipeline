@@ -1,0 +1,79 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[      2402,         71]
+NotebookOptionsPosition[      2035,         57]
+NotebookOutlinePosition[      2445,         73]
+CellTagsIndexPosition[      2402,         70]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell[BoxData[
+ RowBox[{
+  RowBox[{"(*", 
+   RowBox[{
+    RowBox[{"Run", " ", "the", " ", "first", " ", "cell"}], ",", 
+    RowBox[{"choose", " ", 
+     RowBox[{"result_extract", ".", "wl"}]}], ",", 
+    RowBox[{
+     RowBox[{
+     "then", " ", "choose", " ", "the", " ", "experiment", " ", "root", " ", 
+      "folder", " ", "when", " ", 
+      RowBox[{"prompted", ".", "The"}], " ", "report", " ", "displays", " ", 
+      "one", " ", "merged"}], "-", 
+     RowBox[{
+     "window", " ", "inspection", " ", "example", " ", "and", " ", "a", " ", 
+      RowBox[{"Ch1", "/", "Ch2"}], " ", "ZNCC", " ", "registration", " ", 
+      "check", " ", 
+      RowBox[{"panel", ".", "ZNCC"}], " ", "runs", " ", "only", " ", "after", 
+      " ", "clicking", " ", 
+      RowBox[{"Check", "."}]}]}]}], "*)"}], "\[IndentingNewLine]", 
+  RowBox[{
+   RowBox[{
+    RowBox[{"script", "=", 
+     RowBox[{"SystemDialogInput", "[", 
+      RowBox[{"\"\<FileOpen\>\"", ",", 
+       RowBox[{"WindowTitle", "->", "\"\<Select result_extract.wl\>\""}]}], 
+      "]"}]}], ";"}], "\[IndentingNewLine]", 
+   RowBox[{"If", "[", 
+    RowBox[{
+     RowBox[{"StringQ", "[", "script", "]"}], ",", 
+     RowBox[{
+      RowBox[{"Get", "[", "script", "]"}], ";", "\[IndentingNewLine]", 
+      RowBox[{"displayResultExtractionReport", "[", "]"}]}]}], 
+    "]"}]}]}]], "Input",
+ CellChangeTimes->{{3.989534841657669*^9, 3.989534851054512*^9}},
+ CellLabel->"In[1]:=",ExpressionUUID->"227d97ee-e91f-a844-bede-3fa47e16d87c"]
+},
+WindowSize->{1218, 694.1999999999999},
+WindowMargins->{{0, Automatic}, {Automatic, 0}},
+FrontEndVersion->"14.3 for Microsoft Windows (64-bit) (July 8, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"bda28f45-5554-ed4b-a32a-93c254c71333"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[554, 20, 1477, 35, 123, "Input",ExpressionUUID->"227d97ee-e91f-a844-bede-3fa47e16d87c"]
+}
+]
+*)
+
