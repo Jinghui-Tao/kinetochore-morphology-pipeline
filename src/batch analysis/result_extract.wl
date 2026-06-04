@@ -22,7 +22,8 @@ Purpose
 ClearAll[
   standardWidthXName, standardWidthYName, widthXAliases, widthYAliases,
   number2DPeaksAliases,
-  normalizeHeaderName, normalizeHeaderRow, normalizeImportedTable,
+  stripDuplicateHeaderSuffix, normalizeHeaderName, normalizeHeaderKey,
+  normalizeHeaderRow, normalizeImportedTable,
   workflowWarnings, workflowErrors, logMessage, recordWarning, recordError,
   safeImportRaw, safeImportTable, safeExportCSV, columnPositionsByName,
   columnValuesByName, numberStringPattern, toNumericOrMissing, numericValueQ,
@@ -32,23 +33,33 @@ ClearAll[
   safeSeparationRatio, safeMaxValue,
   widthYValues, widthXSlope, configuredChannelNumber, channelNumber,
   doubleChannelEnabled, useParallelTrackingIndexMap,
-  maxParallelKernels, trackingIndexTimeoutSeconds,
-  exportZNCCFittingResults, znccPixelSizeUm, znccMaxShift, znccBlurSigma,
+  useParallelZNCCFitting, maxParallelKernels, maxParallelZNCCKernels,
+  trackingIndexTimeoutSeconds, znccBatchProgressInterval,
+  exportZNCCFittingResults, reuseExistingZNCCFittingResults,
+  znccPixelSizeUm, znccMaxShift, znccBlurSigma,
   znccFittingTimeoutSeconds, znccRefinementTimeoutSeconds,
   znccPreviewTimeoutSeconds,
   closeLaunchedParallelKernels, withManagedParallelKernels,
   makeUniqueHeaders, tableRowsToAssociations, displayTablePreview,
-  rowCount, compiledResultTable, ktOverlapInspectionTable, matchValueQ,
-  rowValueByHeader, metadataRowMatchQ, selectCompiledRowsByMetadata,
-  channelRegistrationTable,
+  rowCount, allKTResultTable, compiledResultTable, ktOverlapInspectionTable, matchValueQ,
+  displayCellValue,
+  rowValueByHeader, channelSplitPosition, channelBlockRange, channelBlockValue, channelImageInfo,
+  metadataRowMatchQ, selectCompiledRowsByMetadata,
+  channelRegistrationTable, displayZNCCVectorTable,
   ktOverlapCandidateRows, ktOverlapInspectionScore, sortedKTOverlapInspectionRows,
   ktAllInOnePlotPath, ktOriginalImagePath, plotImageCell,
   channelOverlayImageCell,
-  fitZNCCForRow, znccFittingVectorUm, appendZNCCFittingColumns,
+  finiteNumericQ, parabolicSubpixelOffset, existingAllKTResultTable,
+  znccRowKeyString,
+  storedZNCCFitFromRow, storedZNCCFitLookup,
+  shiftVectorFitOnly, fitZNCCForRow, fitZNCCRows,
+  znccFittingVectorUm, appendZNCCFittingColumns,
   compiledResultsBase, compiledResultsWithZNCC,
   measurementAssociation, displayIntermediateAnalysisRows,
   displayIntermediateAnalysisPreview, displayIntermediateAnalysisAt,
-  displayIntermediateAnalysisSelector, displayKTOverlapInspectionPreview,
+  displayIntermediateAnalysisAtRow,
+  displayIntermediateAnalysisSelector, displayIntermediateAnalysisControl,
+  displayKTOverlapInspectionPreview,
   displayKTOverlapCandidatePreview,
   displayResultExtractionReport,
   displayZNCCChannelRegistrationPreview,
@@ -108,13 +119,26 @@ number2DPeaksAliases = DeleteDuplicates@{
   "number 2d peaks"
 };
 
-normalizeHeaderName[name_] := Module[{s = ToString[name]},
+stripDuplicateHeaderSuffix[name_String] := StringReplace[
+  name,
+  RegularExpression["(?:\\s*\\(\\d+\\)|\\.\\d+|_\\d+|-\\d+)$"] -> ""
+];
+stripDuplicateHeaderSuffix[name_] := name;
+
+normalizeHeaderName[name_String] := Module[{s = name, base},
+  base = stripDuplicateHeaderSuffix[s];
   Which[
-    MemberQ[ToString /@ widthXAliases, s], standardWidthXName,
-    MemberQ[ToString /@ widthYAliases, s], standardWidthYName,
-    True, name
+    MemberQ[ToString /@ widthXAliases, s] || MemberQ[ToString /@ widthXAliases, base],
+      standardWidthXName,
+    MemberQ[ToString /@ widthYAliases, s] || MemberQ[ToString /@ widthYAliases, base],
+      standardWidthYName,
+    True,
+      base
   ]
 ];
+normalizeHeaderName[name_] := name;
+
+normalizeHeaderKey[name_] := ToString@normalizeHeaderName[name];
 
 normalizeHeaderRow[row_List] := normalizeHeaderName /@ row;
 normalizeHeaderRow[row_] := row;
@@ -142,8 +166,8 @@ safeExportCSV[path_String, data_] := Module[{dir = DirectoryName[path]},
 
 columnPositionsByName[headers_List, aliases_List] := Module[
   {normalizedHeaders, normalizedAliases},
-  normalizedHeaders = normalizeHeaderRow[headers];
-  normalizedAliases = DeleteDuplicates@normalizeHeaderRow[aliases];
+  normalizedHeaders = normalizeHeaderKey /@ headers;
+  normalizedAliases = DeleteDuplicates@(normalizeHeaderKey /@ aliases);
   Flatten@Position[normalizedHeaders, Alternatives @@ normalizedAliases]
 ];
 
@@ -175,6 +199,72 @@ toNumericOrMissing[value_] := Module[{s},
 ];
 
 numericValueQ[value_] := NumberQ[toNumericOrMissing[value]];
+
+rowValueByHeader[headers_List, row_List, aliases_List, occurrence_: 1] := Module[
+  {positions, column},
+  positions = columnPositionsByName[headers, aliases];
+  If[Length[positions] < occurrence, Return[Missing["ColumnNotFound"]]];
+  column = positions[[occurrence]];
+  If[Length[row] >= column, row[[column]], Missing["NotAvailable"]]
+];
+
+channelSplitPosition[headers_List] := Module[
+  {textHeaders, directSplit, conditionColumns},
+  textHeaders = ToString /@ headers;
+  directSplit = Flatten@Position[textHeaders, "//"];
+  If[Length[directSplit] >= 1, Return[First[directSplit]]];
+  conditionColumns = columnPositionsByName[headers, {"condition"}];
+  If[
+    Length[conditionColumns] >= 2,
+    conditionColumns[[2]] - 1,
+    Missing["ChannelSplitNotFound"]
+  ]
+];
+
+channelBlockRange[headers_List, channel_: 1] := Module[
+  {pathColumns, split, start, stop},
+  pathColumns = columnPositionsByName[headers, {"KT trackingPureData path"}];
+  Which[
+    channel === 1 && Length[pathColumns] >= 1,
+      Return[{1, pathColumns[[1]]}],
+    channel === 2 && Length[pathColumns] >= 2,
+      Return[{pathColumns[[1]] + 1, pathColumns[[2]]}]
+  ];
+  split = channelSplitPosition[headers];
+  Which[
+    channel === 1 && IntegerQ[split],
+      start = 1;
+      stop = Max[1, split - 1],
+    channel === 1,
+      start = 1;
+      stop = Length[headers],
+    channel === 2 && IntegerQ[split],
+      start = split + 1;
+      stop = Length[headers],
+    True,
+      Return[Missing["ChannelBlockNotFound"]]
+  ];
+  {start, stop}
+];
+
+channelBlockValue[headers_List, row_List, aliases_List, channel_: 1] := Module[
+  {range, start, stop, localHeaders, localPositions, column},
+  range = channelBlockRange[headers, channel];
+  If[!ListQ[range], Return[Missing["ChannelBlockNotFound"]]];
+  {start, stop} = range;
+  localHeaders = headers[[start ;; stop]];
+  localPositions = columnPositionsByName[localHeaders, aliases];
+  If[Length[localPositions] < 1, Return[Missing["ColumnNotFound"]]];
+  column = start + First[localPositions] - 1;
+  If[Length[row] >= column, row[[column]], Missing["NotAvailable"]]
+];
+
+channelImageInfo[headers_List, row_List, channel_: 1] := Module[
+  {path, index},
+  path = channelBlockValue[headers, row, {"KT trackingPureData path"}, channel];
+  index = toNumericOrMissing[channelBlockValue[headers, row, {"index"}, channel]];
+  If[StringQ[path] && NumericQ[index], {path, index}, Missing["ImageInfoNotFound"]]
+];
 
 numericColumnValues[data_List, aliases_List, occurrence_: 1] := Cases[toNumericOrMissing /@ columnValuesByName[data, aliases, occurrence], _?NumericQ];
 safeMean[values_List] := If[Length[values] > 0, Mean[values], Missing["NoNumericData"]];
@@ -275,6 +365,10 @@ exportZNCCFittingResults = True;
    compiled results table. This calculation does not read, write, filter by,
    or depend on the KT-overlap PreSelect flag. *)
 
+reuseExistingZNCCFittingResults = True;
+(* When True, reuse stored Ch1/Ch2 ZNCC vector columns from an existing allKT.csv
+   in the selected result folder before computing missing rows. *)
+
 znccPixelSizeUm = 0.046*2;
 (* Micrometers per camera pixel after acquisition binning. This matches the
    default pixel size used by the image-analysis step. *)
@@ -288,20 +382,25 @@ znccBlurSigma = 1;
 znccFittingTimeoutSeconds = 30;
 (* Maximum time allowed for each row-level ZNCC fit. Timed-out rows export NA. *)
 
-znccRefinementTimeoutSeconds = 5;
-(* Maximum time allowed for subpixel refinement inside one ZNCC fit. If it
-   times out, the integer-pixel coarse result is used. *)
+znccRefinementTimeoutSeconds = 20;
+(* Maximum time allowed for NMaximize subpixel refinement in each fit. *)
 
 znccPreviewTimeoutSeconds = 30;
 (* Maximum time allowed for one interactive ZNCC preview. *)
 
+useParallelZNCCFitting = True;
+maxParallelZNCCKernels = 4;
+znccBatchProgressInterval = 1;
+(* Batch ZNCC export policy. Batch export computes only the subpixel vector and
+   score; overlay images are generated only by the interactive preview. *)
+
 useParallelTrackingIndexMap = False;
 maxParallelKernels = 8;
 trackingIndexTimeoutSeconds = 300;
-closeLaunchedParallelKernels = True;
-(* Parallel policy. Keep False for routine notebook use because subkernel launch
-   and file I/O can be less stable than the optimized serial mapper. Set True
-   only after a small test run completes normally. *)
+closeLaunchedParallelKernels = False;
+(* Parallel policy. Leave launched subkernels open after ParallelMap. Closing
+   subkernels immediately after a large image-fitting job can leave the main
+   kernel waiting on stale links after the progress dialog has disappeared. *)
 
 channelNumber = Module[{n = configuredChannelNumber},
   Which[
@@ -489,7 +588,9 @@ mapTrackingIndicesToFrames[parallel_: True] := Module[{blocks, mapped},
   mapped
 ];
 
+logMessage["Tracking-index map: start."];
 trackingFrameMapResults = mapTrackingIndicesToFrames[useParallelTrackingIndexMap];
+logMessage["Tracking-index map: done."];
 
 
 pathToKTNames[ktdatapath_]:=StringSplit[ktdatapath,{".",$PathnameSeparator}][[-2]];
@@ -529,6 +630,7 @@ Clear[n,m,l,j,i]
 
 
 (* Collect all KT data and KK-distance data. *)
+logMessage["Compiled KT row collection: start."];
 ktDataCollection=
 If[doubleChannelEnabled,
 Table[Table[Table[Table[Table[
@@ -588,6 +690,7 @@ title = normalizeHeaderRow[Map[If[NumberQ[#], Null, #]&, titles[[1]]]];
 ktDataCollectionExport=Table[Join[{title},Flatten[i,4]],{i,ktDataCollection}];
 
 compiledResultsBase = DeleteCases[ktDataCollectionExport[[1]], Null];
+logMessage["Compiled KT row collection: done. Rows = " <> ToString[Max[0, Length[compiledResultsBase] - 1]] <> "."];
 
 outputs = {};
 
@@ -777,7 +880,9 @@ exportLocation[channelDir_, pair_, ktLabel_, role_, sourceLabel_] := Module[
 ]
 
 
+logMessage["TrackMate location export: start."];
 Table[Table[LocationDataCollect[movefolderi[[i]]],{i,Length[movefolderi]}],{movefolderi,allTrackingDataDir}];
+logMessage["TrackMate location export: done."];
 
 ktDataTableTitlesImport = Table[normalizeHeaderRow[ImportString[i]], {i, Commonest[Table[conditionsdatai[[1]], {conditionsdatai, collectionOfAllCellAllKTData}]][[1]]}];
 
@@ -934,6 +1039,7 @@ sisterMinXYWindowSD[inputdata_, window_] :=
 (* Movement Export *)
 
 
+logMessage["Movement summary: start."];
 resultTitle=Join[ktDataTableTitlesImport[[{1,2,4,5,7}]],{"ch1meanx[]","ch2meanx[]","ch1meany[]","ch2meany[]","Poisson'ratio ch1","Poisson'ratio ch2","ch1SDx[]","ch2SDx[]","ch1SDy[]","ch2SDy[]","ch1tail[]","ch2tail[]","ch1MultiPeakFrequency[]","ch2MultiPeakFrequency[]","ch1LeftTailCount[]","ch1RightTailCount[]","ch2LeftTailCount[]","ch2RightTailCount[]","ktLocationSD[]","sisterLocationSD[]","ktMeanSpeed[]","sisterMeanSpeed[]","ktSDSpeed[]","sisterSDSpeed[]","sdKKDistance[]","meanKKDistance[]","meanxlocation[]","meanylocation[]","meanzlocation[]","windowSD_Minimum","sisterMovingWindowSD2DMinimum","windowSize(frames)"}];
 
 
@@ -945,6 +1051,7 @@ movementExportFileName=DateString["ISODate"]<>"Movement"<>".csv";
 movementExport = safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "Movement_condition1.csv"}], Join[{resultTitle}, movementResults[[1]]]];
 
 movementData = safeImportTable[movementExport];
+logMessage["Movement summary: done."];
 
 
 (* ::Subsection:: *)
@@ -1002,6 +1109,7 @@ normalize[datalisti_,columnslist_]:=ReplacePart[datalisti,Table[i->(datalisti[[i
 normalizedTitle[titles_,columnslist_]:=ReplacePart[titles,Table[i->(titles[[i]]<>"_Normalized"),{i,columnslist}]]
 
 
+logMessage["Normalized movement summary: start."];
 normalizedExtractData=
 Join[{normalizedTitle[movementDataTitle,{ktLocationSDColumn,
 sisterLocationSDColumn,
@@ -1020,6 +1128,7 @@ sdKKDistanceColumn,
 meanKKDistanceColumn}]],{i,2,Length[movementData]}]];
 
 normalizedMovementExport = safeExportCSV[FileNameJoin[{DirectoryName[movementExport], DateString["ISODate"] <> "Normalized_of_" <> movementExportFileName}], normalizedExtractData];
+logMessage["Normalized movement summary: done."];
 
 
 (* ::Section:: *)
@@ -1069,7 +1178,18 @@ sa=StandardDeviation[va];
 sb=StandardDeviation[vb];
 If[sa==0.||sb==0.,-Infinity,Total[(va-ma) (vb-mb)]/(Length[va] sa sb)]];
 
-shiftVector[c1Image_,c2Image_,maxShift_:3,blurSigma_:1,cropMargin_:Automatic]:=Module[{img1,img2,margin,objective,coarseGrid,coarseBest,tx0,ty0,sol,bestShift,bestScore,aligned,fixed1,fixed2,originalFixed2,shiftOverlay,originalOverlay},img1=ColorConvert[ImageAdjust[c1Image],"Grayscale"];
+finiteNumericQ[x_]:=NumericQ[x]&&TrueQ[-Infinity<N[x]<Infinity];
+
+parabolicSubpixelOffset[left_,center_,right_]:=Module[{vals,den,offset},
+vals=N@{left,center,right};
+If[!VectorQ[vals,finiteNumericQ],Return[0.]];
+den=vals[[1]]-2 vals[[2]]+vals[[3]];
+If[!finiteNumericQ[den]||Abs[den]<10^-12,Return[0.]];
+offset=0.5 (vals[[1]]-vals[[3]])/den;
+If[finiteNumericQ[offset],Clip[offset,{-1.,1.}],0.]];
+
+shiftVectorFitOnly[c1Image_,c2Image_,maxShift_:3,blurSigma_:1,cropMargin_:Automatic]:=Module[{img1,img2,margin,fixed1,objective,coarseGrid,coarseBest,tx0,ty0,integerScore,dx,dy,quadShift,quadScore,sol,bestShift,bestScore},
+img1=ColorConvert[ImageAdjust[c1Image],"Grayscale"];
 img2=ColorConvert[ImageAdjust[c2Image],"Grayscale"];
 If[blurSigma>0,img1=GaussianFilter[img1,blurSigma];
 img2=GaussianFilter[img2,blurSigma];];
@@ -1078,21 +1198,52 @@ fixed1=centerCrop[img1,margin];
 objective[tx_?NumericQ,ty_?NumericQ]:=Module[{bShift,crop2},bShift=shiftImageSmooth[img2,tx,ty];
 crop2=centerCrop[bShift,margin];
 znccImage[fixed1,crop2]];
-(*integer-pixel coarse search*)coarseGrid=Flatten[Table[{tx,ty,objective[tx,ty]},{tx,-maxShift,maxShift,1},{ty,-maxShift,maxShift,1}],1];
+coarseGrid=Flatten[Table[{tx,ty,objective[tx,ty]},{tx,-maxShift,maxShift,1},{ty,-maxShift,maxShift,1}],1];
 coarseBest=First@MaximalBy[coarseGrid,Last];
+If[!TrueQ[-Infinity<coarseBest[[3]]<Infinity],Return[$Failed]];
 {tx0,ty0}=coarseBest[[1;;2]];
-(*subpixel local refinement around best integer shift*)sol=Quiet@Check[
+integerScore[x_Integer,y_Integer]:=Module[{hit=Cases[coarseGrid,{x,y,s_}:>s,1]},
+If[hit==={},-Infinity,First[hit]]];
+dx=If[tx0<=-maxShift||tx0>=maxShift,0.,
+parabolicSubpixelOffset[integerScore[tx0-1,ty0],integerScore[tx0,ty0],integerScore[tx0+1,ty0]]];
+dy=If[ty0<=-maxShift||ty0>=maxShift,0.,
+parabolicSubpixelOffset[integerScore[tx0,ty0-1],integerScore[tx0,ty0],integerScore[tx0,ty0+1]]];
+quadShift=N@{Clip[tx0+dx,{tx0-1.,tx0+1.}],Clip[ty0+dy,{ty0-1.,ty0+1.}]};
+quadScore=Quiet@Check[objective[quadShift[[1]],quadShift[[2]]],-Infinity];
+sol=Quiet@Check[
 TimeConstrained[
 NMaximize[{objective[tx,ty],tx0-1<=tx<=tx0+1&&ty0-1<=ty<=ty0+1},{tx,ty},Method->"NelderMead"],
 znccRefinementTimeoutSeconds,
 $Aborted],
 $Failed];
 If[sol===$Failed||sol===$Aborted||!ListQ[sol],
-bestShift={tx0,ty0};
-bestScore=coarseBest[[3]],
-bestShift={tx,ty}/. Last[sol];
-bestScore=First[sol]];
+bestShift=quadShift;
+bestScore=N@quadScore,
+bestShift=N@({tx,ty}/. Last[sol]);
+bestScore=N@First[sol];
+If[!VectorQ[bestShift,NumericQ]||!NumericQ[bestScore]||!TrueQ[-Infinity<bestScore<Infinity],
+bestShift=quadShift;
+bestScore=N@quadScore]];
+If[finiteNumericQ[quadScore]&&finiteNumericQ[bestScore]&&quadScore>bestScore,
+bestShift=quadShift;
+bestScore=N@quadScore];
+If[!VectorQ[bestShift,finiteNumericQ]||!finiteNumericQ[bestScore],
+bestShift=N@{tx0,ty0};
+bestScore=N@coarseBest[[3]]];
+{bestShift[[1]],bestShift[[2]],bestScore}];
+
+shiftVector[c1Image_,c2Image_,maxShift_:3,blurSigma_:1,cropMargin_:Automatic]:=Module[{fit,img1,img2,margin,bestShift,bestScore,aligned,fixed1,fixed2,originalFixed2,shiftOverlay,originalOverlay},
+fit=shiftVectorFitOnly[c1Image,c2Image,maxShift,blurSigma,cropMargin];
+If[fit===$Failed||!ListQ[fit]||Length[fit]<3,Return[$Failed]];
+img1=ColorConvert[ImageAdjust[c1Image],"Grayscale"];
+img2=ColorConvert[ImageAdjust[c2Image],"Grayscale"];
+If[blurSigma>0,img1=GaussianFilter[img1,blurSigma];
+img2=GaussianFilter[img2,blurSigma];];
+margin=Replace[cropMargin,Automatic->Ceiling[maxShift+1 blurSigma]];
+bestShift=N@fit[[1;;2]];
+bestScore=N@fit[[3]];
 aligned=shiftImageSmooth[img2,bestShift[[1]],bestShift[[2]]];
+fixed1=centerCrop[img1,margin];
 fixed2=centerCrop[aligned,margin];
 originalFixed2=centerCrop[img2,margin];
 shiftOverlay=overlayCh12[fixed1,fixed2];
@@ -1119,18 +1270,83 @@ znccFittingVectorUm[fit_List] := Module[{scale, tx, ty, score},
 znccFittingVectorUm[_] := {"NA", "NA", "NA"};
 
 
+existingAllKTResultTable[] := Module[{path, data},
+  If[!ValueQ[cellSetDir] || !StringQ[cellSetDir], Return[{}]];
+  path = FileNameJoin[{cellSetDir, DateString["ISODate"] <> "allKT.csv"}];
+  If[!FileExistsQ[path], Return[{}]];
+  data = Quiet@Check[safeImportTable[path], $Failed];
+  If[ListQ[data] && Length[data] > 0, data, {}]
+];
+
+
+znccRowKeyString[headers_List, row_List] := Module[
+  {ch1Info, ch2Info, path1, path2, index1, index2},
+  ch1Info = channelImageInfo[headers, row, 1];
+  ch2Info = channelImageInfo[headers, row, 2];
+  If[!ListQ[ch1Info] || !ListQ[ch2Info], Return[Missing["NoRowKey"]]];
+  {path1, index1} = ch1Info;
+  {path2, index2} = ch2Info;
+  If[
+    !StringQ[path1] || !StringQ[path2] || !NumericQ[index1] || !NumericQ[index2],
+    Return[Missing["NoRowKey"]]
+  ];
+  StringRiffle[{path1, path2, ToString[Round[index1]], ToString[Round[index2]]}, "||"]
+];
+
+
+storedZNCCFitFromRow[headers_List, row_List] := Module[
+  {xCols, yCols, scoreCols, x, y, score},
+  xCols = columnPositionsByName[
+    headers,
+    {"Ch1/Ch2 ZNCC fitting vector X (um)", "znccFittingVectorX(um)"}
+  ];
+  yCols = columnPositionsByName[
+    headers,
+    {"Ch1/Ch2 ZNCC fitting vector Y (um)", "znccFittingVectorY(um)"}
+  ];
+  scoreCols = columnPositionsByName[
+    headers,
+    {"Ch1/Ch2 ZNCC fitting score", "znccFittingScore"}
+  ];
+  If[Length[xCols] < 1 || Length[yCols] < 1, Return[Missing["NoStoredZNCC"]]];
+  x = If[Length[row] >= First[xCols], toNumericOrMissing[row[[First[xCols]]]], Missing["NoStoredZNCC"]];
+  y = If[Length[row] >= First[yCols], toNumericOrMissing[row[[First[yCols]]]], Missing["NoStoredZNCC"]];
+  score = If[
+    Length[scoreCols] >= 1 && Length[row] >= First[scoreCols],
+    toNumericOrMissing[row[[First[scoreCols]]]],
+    Missing["NoStoredZNCC"]
+  ];
+  If[NumericQ[x] && NumericQ[y], {x, y, If[NumericQ[score], score, "NA"]}, Missing["NoStoredZNCC"]]
+];
+
+
+storedZNCCFitLookup[data_List] := Module[{headers, rows, pairs},
+  If[Length[data] < 2, Return[<||>]];
+  headers = First[data];
+  rows = Rest[data];
+  pairs = DeleteCases[
+    Map[
+      Module[{key = znccRowKeyString[headers, #], fit = storedZNCCFitFromRow[headers, #]},
+        If[StringQ[key] && ListQ[fit], key -> fit, Missing["NoStoredZNCC"]]
+      ]&,
+      rows
+    ],
+    _Missing
+  ];
+  Association[pairs]
+];
+
+
 fitZNCCForRow[headers_List, row_List, maxShift_: 3, blurSigma_: 1] := Module[
   {
-    pathCols, indexCols, path1, path2, index1, index2,
+    ch1Info, ch2Info, path1, path2, index1, index2,
     imagePath1, imagePath2, image1, image2, fit
   },
-  pathCols = columnPositionsByName[headers, {"KT trackingPureData path"}];
-  indexCols = columnPositionsByName[headers, {"index"}];
-  If[Length[pathCols] < 2 || Length[indexCols] < 2, Return[{"NA", "NA", "NA"}]];
-  path1 = row[[pathCols[[1]]]];
-  path2 = row[[pathCols[[2]]]];
-  index1 = toNumericOrMissing[row[[indexCols[[1]]]]];
-  index2 = toNumericOrMissing[row[[indexCols[[2]]]]];
+  ch1Info = channelImageInfo[headers, row, 1];
+  ch2Info = channelImageInfo[headers, row, 2];
+  If[!ListQ[ch1Info] || !ListQ[ch2Info], Return[{"NA", "NA", "NA"}]];
+  {path1, index1} = ch1Info;
+  {path2, index2} = ch2Info;
   If[
     !StringQ[path1] || !StringQ[path2] || !NumericQ[index1] || !NumericQ[index2],
     Return[{"NA", "NA", "NA"}]
@@ -1146,7 +1362,7 @@ fitZNCCForRow[headers_List, row_List, maxShift_: 3, blurSigma_: 1] := Module[
   ];
   fit = Quiet@Check[
     TimeConstrained[
-      shiftVector[image1, image2, maxShift, blurSigma],
+      shiftVectorFitOnly[image1, image2, maxShift, blurSigma],
       znccFittingTimeoutSeconds,
       $Aborted
     ],
@@ -1160,27 +1376,111 @@ fitZNCCForRow[headers_List, row_List, maxShift_: 3, blurSigma_: 1] := Module[
 ];
 
 
+fitZNCCRows[headers_List, rows_List] := Module[
+  {total, kernels, fits, parallelHeaders, storedLookup, storedFits},
+  total = Length[rows];
+  If[total == 0, Return[{}]];
+  If[
+    !TrueQ[exportZNCCFittingResults],
+    Return[ConstantArray[{"NA", "NA", "NA"}, total]]
+  ];
+  If[
+    TrueQ[reuseExistingZNCCFittingResults],
+    storedLookup = storedZNCCFitLookup[existingAllKTResultTable[]];
+    If[AssociationQ[storedLookup] && Length[storedLookup] > 0,
+      storedFits = Map[
+        With[{key = znccRowKeyString[headers, #]},
+          If[StringQ[key], Lookup[storedLookup, key, Missing["NoStoredZNCC"]], Missing["NoStoredZNCC"]]
+        ]&,
+        rows
+      ];
+      If[
+        Length[storedFits] == total && AllTrue[storedFits, ListQ],
+        logMessage["Reused stored Ch1/Ch2 ZNCC fitting vectors from existing allKT.csv for " <> ToString[total] <> " rows."];
+        Return[storedFits]
+      ]
+    ]
+  ];
+  logMessage["Computing Ch1/Ch2 ZNCC fitting vectors for " <> ToString[total] <> " rows."];
+  kernels = Max[1, Min[$ProcessorCount - 1, maxParallelKernels, maxParallelZNCCKernels]];
+  If[
+    TrueQ[useParallelZNCCFitting] && kernels > 1 && total > 1,
+    parallelHeaders = headers;
+    fits = withManagedParallelKernels[
+      kernels,
+      If[KeyExistsQ[Association@SystemOptions[], "EvaluateInFrontEnd"], SetSystemOptions["EvaluateInFrontEnd" -> False]];
+      DistributeDefinitions[
+        parallelHeaders, fitZNCCForRow, shiftVectorFitOnly,
+        ktOriginalImagePath, toNumericOrMissing, columnPositionsByName,
+        rowValueByHeader, channelSplitPosition, channelBlockRange,
+        channelBlockValue, channelImageInfo,
+        normalizeHeaderName, normalizeHeaderKey, normalizeHeaderRow, standardWidthXName,
+        standardWidthYName, widthXAliases, widthYAliases, numberStringPattern,
+        znccFittingVectorUm, znccImage, shiftImageSmooth, centerCrop,
+        finiteNumericQ, parabolicSubpixelOffset,
+        znccMaxShift, znccBlurSigma, znccPixelSizeUm,
+        znccFittingTimeoutSeconds, znccRefinementTimeoutSeconds
+      ];
+      ParallelMap[
+        fitZNCCForRow[parallelHeaders, #, znccMaxShift, znccBlurSigma]&,
+        rows,
+        Method -> "CoarsestGrained"
+      ]
+    ];
+    If[fits === $Failed || !ListQ[fits] || Length[fits] =!= total,
+      recordWarning["ParallelZNCCFailed", <|"Fallback" -> "Serial ZNCC fitting"|>];
+      fits = MapIndexed[
+        (
+          If[
+            IntegerQ[znccBatchProgressInterval] && znccBatchProgressInterval > 0 &&
+            (First[#2] == 1 || Mod[First[#2], znccBatchProgressInterval] == 0 || First[#2] == total),
+            logMessage["ZNCC fitting row " <> ToString[First[#2]] <> "/" <> ToString[total]]
+          ];
+          fitZNCCForRow[headers, #1, znccMaxShift, znccBlurSigma]
+        )&,
+        rows
+      ]
+    ],
+    fits = MapIndexed[
+      (
+        If[
+          IntegerQ[znccBatchProgressInterval] && znccBatchProgressInterval > 0 &&
+          (First[#2] == 1 || Mod[First[#2], znccBatchProgressInterval] == 0 || First[#2] == total),
+          logMessage["ZNCC fitting row " <> ToString[First[#2]] <> "/" <> ToString[total]]
+        ];
+        fitZNCCForRow[headers, #1, znccMaxShift, znccBlurSigma]
+      )&,
+      rows
+    ]
+  ];
+  logMessage["Finished Ch1/Ch2 ZNCC fitting vectors."];
+  fits
+];
+
+
 appendZNCCFittingColumns[data_List] := Module[{headers, rows, fits},
   If[Length[data] < 1, Return[data]];
   headers = First[data];
   rows = Rest[data];
-  fits = If[
-    TrueQ[exportZNCCFittingResults],
-    fitZNCCForRow[headers, #, znccMaxShift, znccBlurSigma]& /@ rows,
-    ConstantArray[{"NA", "NA", "NA"}, Length[rows]]
-  ];
+  fits = fitZNCCRows[headers, rows];
   Join[
-    {Join[headers, {"znccFittingVectorX(um)", "znccFittingVectorY(um)", "znccFittingScore"}]},
+    {Join[headers, {
+      "Ch1/Ch2 ZNCC fitting vector X (um)",
+      "Ch1/Ch2 ZNCC fitting vector Y (um)",
+      "Ch1/Ch2 ZNCC fitting score"
+    }]},
     MapThread[Join, {rows, fits}]
   ]
 ];
 
 
+logMessage["Compiled Ch1/Ch2 ZNCC export columns: start."];
 compiledResultsWithZNCC = If[
   TrueQ[doubleChannelEnabled],
   appendZNCCFittingColumns[compiledResultsBase],
   compiledResultsBase
 ];
+logMessage["Compiled Ch1/Ch2 ZNCC export columns: done."];
 
 outputs = {
   safeExportCSV[
@@ -1188,6 +1488,7 @@ outputs = {
     compiledResultsWithZNCC
   ]
 };
+logMessage["Compiled allKT export: done."];
 
 
 (* ::Section:: *)
@@ -1208,7 +1509,11 @@ Ch1/Ch2 ZNCC fitting.
 inspectionDataPath=outputs[[1]];
 
 
-inspectionData=Select[ktDataCollectionExport[[1]],#=!=Null&&Length[#]==Commonest[Length/@ktDataCollectionExport[[1]]][[1]]&];
+logMessage["KT-overlap inspection table: start."];
+inspectionData=Select[
+  compiledResultsWithZNCC,
+  # =!= Null && Length[#] == Commonest[Length /@ compiledResultsWithZNCC][[1]]&
+];
 
 
 markData=Transpose[Join[Transpose[inspectionData],{Join[{"select"},ConstantArray[0,Length[inspectionData]-1]]}]]; (* Initialize KT-overlap inspection mark. *)
@@ -1327,7 +1632,9 @@ ConstantArray[1,Length[data]],ConstantArray[Infinity,Length[data]],ConstantArray
 clusterKTIntensityJoinKTDataset[singleKTDataset_]:=Map[Catenate,Transpose[{singleKTDataset,clusterKTIntensity[singleKTDataset]}]];(*Append cluster features to the KT dataset.*)
 
 
+logMessage["KT-overlap intensity clustering: start."];
 markDataSetNormalizedTotIntensitySorted=Join[{Join[markData[[1]],{"ch1IntensitySeparationRate","ch1Classifier","ch1AreaSeparationRate","ch1Group2AreaMean","ch2IntensitySeparationRate","ch2Classifier","ch2AreaSeparationRate","ch2Group2AreaMean"}]},SortBy[Flatten[Map[clusterKTIntensityJoinKTDataset,GatherBy[Drop[markDataSet,1],#[[Range[5]]]&]],1],#[[{1,2,3,4,5}]]&]];
+logMessage["KT-overlap intensity clustering: done."];
 
 
 (* Mark likely target/background KT signal overlap frames when:
@@ -1343,6 +1650,7 @@ markDataSetNormalizedTotIntensitySortedIntensityPreSelect=Join[{Join[markDataSet
 outputPreSelect = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "allKT_PreSelectMark.csv"}], markDataSetNormalizedTotIntensitySortedIntensityPreSelect]};
 
 outputFiltered = {safeExportCSV[FileNameJoin[{cellSetDir, DateString["ISODate"] <> "allKT_filtered.csv"}], Select[markDataSetNormalizedTotIntensitySortedIntensityPreSelect, #[[-1]] != 1&]]};
+logMessage["KT-overlap inspection table: done."];
 
 If[doubleChannelEnabled,
 displayDataWithKTOverlapFlags = markDataSetNormalizedTotIntensitySortedIntensityPreSelect;
@@ -1376,13 +1684,27 @@ workflowSummary = <|
 (* Notebook Display *)
 
 
-makeUniqueHeaders[headers_List] := Module[{counts = <||>, key, n},
+makeUniqueHeaders[headers_List] := Module[
+  {counts = <||>, baseHeaders, totalCounts, key, n},
+  baseHeaders = ToString /@ (normalizeHeaderName /@ headers);
+  totalCounts = Counts[baseHeaders];
   Table[
-    key = ToString[header];
+    key = baseHeaders[[ii]];
     n = Lookup[counts, key, 0] + 1;
     counts[key] = n;
-    If[n == 1, key, key <> " (" <> ToString[n] <> ")"],
-    {header, headers}
+    Which[
+      key === "/" || key === "//",
+        key <> " " <> ToString[n],
+      n == 1 && Lookup[totalCounts, key, 0] == 1,
+        key,
+      n == 1,
+        "Ch1 " <> key,
+      n == 2,
+        "Ch2 " <> key,
+      True,
+        key <> " (" <> ToString[n] <> ")"
+    ],
+    {ii, Length[headers]}
   ]
 ];
 
@@ -1408,16 +1730,39 @@ displayTablePreview[_, ___] := Style["No rows available.", Italic, Gray];
 rowCount[data_] := If[ListQ[data] && Length[data] > 0, Max[Length[data] - 1, 0], 0];
 
 
-compiledResultTable[] := Which[
-  ValueQ[compiledResultsWithZNCC] && ListQ[compiledResultsWithZNCC],
-    compiledResultsWithZNCC,
-  ValueQ[compiledResultsBase] && ListQ[compiledResultsBase],
-    compiledResultsBase,
-  ValueQ[ktDataCollectionExport] && ListQ[ktDataCollectionExport] &&
-    Length[ktDataCollectionExport] >= 1,
-    ktDataCollectionExport[[1]],
-  True,
-    {}
+allKTResultTable[] := Module[{paths, path, data},
+  paths = DeleteDuplicates@Cases[
+    Flatten@{
+      If[ValueQ[outputs] && ListQ[outputs], outputs, {}],
+      If[ValueQ[cellSetDir] && StringQ[cellSetDir],
+        FileNameJoin[{cellSetDir, DateString["ISODate"] <> "allKT.csv"}],
+        Nothing
+      ]
+    },
+    s_String /; FileExistsQ[s] && StringEndsQ[FileNameTake[s], "allKT.csv"]
+  ];
+  If[Length[paths] == 0, Return[{}]];
+  path = First[paths];
+  data = Quiet@Check[safeImportTable[path], $Failed];
+  If[ListQ[data] && Length[data] > 0, data, {}]
+];
+
+
+compiledResultTable[] := Module[{fromAllKT},
+  fromAllKT = allKTResultTable[];
+  Which[
+    ListQ[fromAllKT] && Length[fromAllKT] > 0,
+      fromAllKT,
+    ValueQ[compiledResultsWithZNCC] && ListQ[compiledResultsWithZNCC],
+      compiledResultsWithZNCC,
+    ValueQ[compiledResultsBase] && ListQ[compiledResultsBase],
+      compiledResultsBase,
+    ValueQ[ktDataCollectionExport] && ListQ[ktDataCollectionExport] &&
+      Length[ktDataCollectionExport] >= 1,
+      ktDataCollectionExport[[1]],
+    True,
+      {}
+  ]
 ];
 
 
@@ -1440,13 +1785,44 @@ matchValueQ[value_, criterion_] := Module[{left, right},
   ToString[value] == ToString[criterion]
 ];
 
+displayCellValue[value_] := If[MatchQ[value, _Missing], "NA", value];
 
-rowValueByHeader[headers_List, row_List, aliases_List, occurrence_: 1] := Module[
-  {positions, column},
-  positions = columnPositionsByName[headers, aliases];
-  If[Length[positions] < occurrence, Return[Missing["ColumnNotFound"]]];
-  column = positions[[occurrence]];
-  If[Length[row] >= column, row[[column]], Missing["NotAvailable"]]
+
+displayZNCCVectorTable[maxRows_: 50] := Module[{data, headers, rows},
+  data = compiledResultTable[];
+  If[Length[data] < 2, Return[Style["No compiled result rows are available.", Italic, Gray]]];
+  headers = First[data];
+  rows = Take[Rest[data], UpTo[maxRows]];
+  Dataset[
+    MapIndexed[
+      <|
+        "Compiled row index" -> First[#2],
+        "Cell index" -> rowValueByHeader[headers, #1, {"Cell index"}, 1],
+        "KT pair" -> rowValueByHeader[headers, #1, {"KT pairs"}, 1],
+        "KT" -> rowValueByHeader[headers, #1, {"KT"}, 1],
+        "Time" -> rowValueByHeader[headers, #1, {"Time"}, 1],
+        "Ch1/Ch2 ZNCC fitting vector X (um)" ->
+          displayCellValue@rowValueByHeader[
+            headers,
+            #1,
+            {"Ch1/Ch2 ZNCC fitting vector X (um)", "znccFittingVectorX(um)"}
+          ],
+        "Ch1/Ch2 ZNCC fitting vector Y (um)" ->
+          displayCellValue@rowValueByHeader[
+            headers,
+            #1,
+            {"Ch1/Ch2 ZNCC fitting vector Y (um)", "znccFittingVectorY(um)"}
+          ],
+        "Ch1/Ch2 ZNCC fitting score" ->
+          displayCellValue@rowValueByHeader[
+            headers,
+            #1,
+            {"Ch1/Ch2 ZNCC fitting score", "znccFittingScore"}
+          ]
+      |>&,
+      rows
+    ]
+  ]
 ];
 
 
@@ -1546,20 +1922,20 @@ plotImageCell[label_String, ktdatapath_, index_] := Module[{numericIndex, plotPa
 
 channelOverlayImageCell[headers_List, row_List] := Module[
   {
-    ch1Path, ch2Path, ch1Index, ch2Index, imagePath1, imagePath2,
+    ch1Info, ch2Info, ch1Path, ch2Path, ch1Index, ch2Index, imagePath1, imagePath2,
     image1, image2, overlay, titleLabel
   },
   If[!TrueQ[doubleChannelEnabled], Return[Nothing]];
   titleLabel = Column[{Style["Ch1/Ch2", Bold], Style["channel overlay", Bold]},
     Alignment -> Center, Spacings -> 0];
-  ch1Path = rowValueByHeader[headers, row, {"KT trackingPureData path"}, 1];
-  ch2Path = rowValueByHeader[headers, row, {"KT trackingPureData path"}, 2];
-  ch1Index = toNumericOrMissing[rowValueByHeader[headers, row, {"index"}, 1]];
-  ch2Index = toNumericOrMissing[rowValueByHeader[headers, row, {"index"}, 2]];
+  ch1Info = channelImageInfo[headers, row, 1];
+  ch2Info = channelImageInfo[headers, row, 2];
   If[
-    !StringQ[ch1Path] || !StringQ[ch2Path] || !NumericQ[ch1Index] || !NumericQ[ch2Index],
+    !ListQ[ch1Info] || !ListQ[ch2Info],
     Return[Column[{titleLabel, Style["No channel-overlay image available.", Italic, Gray]}]]
   ];
+  {ch1Path, ch1Index} = ch1Info;
+  {ch2Path, ch2Index} = ch2Info;
   imagePath1 = ktOriginalImagePath[ch1Path, ch1Index];
   imagePath2 = ktOriginalImagePath[ch2Path, ch2Index];
   If[
@@ -1594,39 +1970,44 @@ channelOverlayImageCell[headers_List, row_List] := Module[
 
 measurementAssociation[headers_List, row_List, occurrence_: 1, label_: "Ch1"] := <|
   "Channel" -> label,
-  "Condition" -> rowValueByHeader[headers, row, {"condition"}, occurrence],
-  "Cell index" -> rowValueByHeader[headers, row, {"Cell index"}, occurrence],
-  "KT pair" -> rowValueByHeader[headers, row, {"KT pairs"}, occurrence],
-  "KT" -> rowValueByHeader[headers, row, {"KT"}, occurrence],
-  "Time" -> rowValueByHeader[headers, row, {"Time"}, occurrence],
-  "Frame index" -> rowValueByHeader[headers, row, {"index"}, occurrence],
-  "KT area (pixels)" -> rowValueByHeader[headers, row, {"ktArea(pixels)"}, occurrence],
-  "Width X (um)" -> rowValueByHeader[headers, row, widthXAliases, occurrence],
-  "Width Y (um)" -> rowValueByHeader[headers, row, widthYAliases, occurrence],
-  "Orientation (deg)" -> rowValueByHeader[headers, row, {"orientationAngle(deg)"}, occurrence],
-  "Tail" -> rowValueByHeader[headers, row, {"tail or not"}, occurrence],
-  "Tail direction" -> rowValueByHeader[headers, row, {"tail direction"}, occurrence],
-  "2D peak count" -> rowValueByHeader[headers, row, number2DPeaksAliases, occurrence],
-  "2nd/1st peak ratio" -> rowValueByHeader[headers, row, {"ratio 2nd/1st peak"}, occurrence],
-  "Total intensity" -> rowValueByHeader[headers, row, {"totalIntensity"}, occurrence]
+  "Condition" -> channelBlockValue[headers, row, {"condition"}, occurrence],
+  "Cell index" -> channelBlockValue[headers, row, {"Cell index"}, occurrence],
+  "KT pair" -> channelBlockValue[headers, row, {"KT pairs"}, occurrence],
+  "KT" -> channelBlockValue[headers, row, {"KT"}, occurrence],
+  "Time" -> channelBlockValue[headers, row, {"Time"}, occurrence],
+  "Frame index" -> channelBlockValue[headers, row, {"index"}, occurrence],
+  "KT area (pixels)" -> channelBlockValue[headers, row, {"ktArea(pixels)"}, occurrence],
+  "Width X (um)" -> channelBlockValue[headers, row, widthXAliases, occurrence],
+  "Width Y (um)" -> channelBlockValue[headers, row, widthYAliases, occurrence],
+  "Orientation (deg)" -> channelBlockValue[headers, row, {"orientationAngle(deg)"}, occurrence],
+  "Tail" -> channelBlockValue[headers, row, {"tail or not"}, occurrence],
+  "Tail direction" -> channelBlockValue[headers, row, {"tail direction"}, occurrence],
+  "2D peak count" -> channelBlockValue[headers, row, number2DPeaksAliases, occurrence],
+  "2nd/1st peak ratio" -> channelBlockValue[headers, row, {"ratio 2nd/1st peak"}, occurrence],
+  "Total intensity" -> channelBlockValue[headers, row, {"totalIntensity"}, occurrence]
 |>;
 
 
 displayIntermediateAnalysisRows[data_List, maxRows_: 4, sectionTitle_: "Main-program intermediate plots"] := Module[
-  {headers, rows, panels, ch1Path, ch2Path, ch1Index, ch2Index},
+  {headers, rows, panels, ch1Info, ch2Info, ch1Path, ch2Path, ch1Index, ch2Index, panelTitle},
   If[Length[data] < 2, Return[Style["No rows available.", Italic, Gray]]];
   headers = First[data];
   rows = Take[Rest[data], UpTo[maxRows]];
   panels = MapIndexed[
     (
-      ch1Path = rowValueByHeader[headers, #1, {"KT trackingPureData path"}, 1];
-      ch2Path = rowValueByHeader[headers, #1, {"KT trackingPureData path"}, 2];
-      ch1Index = rowValueByHeader[headers, #1, {"index"}, 1];
-      ch2Index = rowValueByHeader[headers, #1, {"index"}, 2];
+      ch1Info = channelImageInfo[headers, #1, 1];
+      ch2Info = channelImageInfo[headers, #1, 2];
+      {ch1Path, ch1Index} = If[ListQ[ch1Info], ch1Info, {Missing["NotAvailable"], Missing["NotAvailable"]}];
+      {ch2Path, ch2Index} = If[ListQ[ch2Info], ch2Info, {Missing["NotAvailable"], Missing["NotAvailable"]}];
+      panelTitle = If[
+        StringMatchQ[sectionTitle, ___ ~~ "row " ~~ DigitCharacter ..],
+        sectionTitle,
+        sectionTitle <> " " <> ToString[First[#2]]
+      ];
       Panel[
         Column[
           {
-            Style[sectionTitle <> " " <> ToString[First[#2]], Bold, 13],
+            Style[panelTitle, Bold, 13],
             Grid[
               {
                 DeleteCases[
@@ -1677,25 +2058,53 @@ displayIntermediateAnalysisAt[cellIndex_, ktPair_, kt_: All, time_: All, maxRows
 ];
 
 
+displayIntermediateAnalysisAtRow[rowIndex_: 1] := Module[
+  {data, rows},
+  data = compiledResultTable[];
+  If[Length[data] < 2, Return[Style["No compiled result rows are available.", Italic, Gray]]];
+  rows = Rest[data];
+  If[
+    !IntegerQ[rowIndex] || rowIndex < 1 || rowIndex > Length[rows],
+    Return[
+      Style[
+        "Index is out of range. Available range: 1-" <> ToString[Length[rows]],
+        Red
+      ]
+    ]
+  ];
+  displayIntermediateAnalysisRows[
+    Join[{First[data]}, {rows[[rowIndex]]}],
+    1,
+    "Compiled row " <> ToString[rowIndex]
+  ]
+];
+
+
 displayIntermediateAnalysisSelector[] := DynamicModule[
-  {cellIndex = 1, ktPair = 1, kt = 1, time = 0, maxRows = 20,
-   result = Style["Enter a row target and click Display.", Italic, Gray]},
+  {rowIndex = 1,
+   result = Style["Enter a compiled row index and click Check.", Italic, Gray]},
   Column[
     {
+      Style[
+        Row[{"Available compiled result rows: ", Dynamic[rowCount[compiledResultTable[]]]}],
+        Small,
+        Gray
+      ],
       Grid[
         {
-          {"Cell index", InputField[Dynamic[cellIndex], Number]},
-          {"KT pair", InputField[Dynamic[ktPair], Number]},
-          {"KT", InputField[Dynamic[kt], Number]},
-          {"Time", InputField[Dynamic[time], Number]},
-          {"Maximum rows", InputField[Dynamic[maxRows], Number]}
+          {"Compiled row index", InputField[Dynamic[rowIndex], Number, FieldSize -> 8]}
         },
         Alignment -> Left,
-        Spacings -> {1, 0.7}
+        Spacings -> {1.2, 0.7}
       ],
       Button[
-        "Display",
-        result = displayIntermediateAnalysisAt[cellIndex, ktPair, kt, time, maxRows],
+        "Check",
+        With[
+          {
+            idx = If[NumericQ[rowIndex], Round[rowIndex], rowIndex]
+          },
+          result = displayIntermediateAnalysisAtRow[idx]
+        ],
         Method -> "Queued"
       ],
       Dynamic[result]
@@ -1703,6 +2112,9 @@ displayIntermediateAnalysisSelector[] := DynamicModule[
     Spacings -> 1
   ]
 ];
+
+
+displayIntermediateAnalysisControl[] := displayIntermediateAnalysisSelector[];
 
 
 displayKTOverlapInspectionPreview[maxRows_: 1] := Module[{data, rows},
@@ -1783,6 +2195,14 @@ displayResultExtractionReport[maxRows_: 50, previewRows_: 4, includeZNCCPreview_
       ],
       Style["Compiled results", Bold, 14],
       displayTablePreview[compiledTable, maxRows],
+      Style["Compiled Ch1/Ch2 ZNCC fitting vectors", Bold, 14],
+      If[
+        TrueQ[doubleChannelEnabled],
+        displayZNCCVectorTable[maxRows],
+        Style["Single-channel mode: no Ch1/Ch2 ZNCC fitting vectors.", Italic, Gray]
+      ],
+      Style["Main-program intermediate plot check", Bold, 14],
+      displayIntermediateAnalysisControl[],
       Style["Compiled-row Ch1/Ch2 ZNCC fitting result", Bold, 14],
       If[
         TrueQ[doubleChannelEnabled] && TrueQ[includeZNCCPreview] &&
@@ -1808,7 +2228,7 @@ displayResultExtractionReport[maxRows_: 50, previewRows_: 4, includeZNCCPreview_
 
 displayZNCCChannelRegistrationControl[] := DynamicModule[
   {
-    rowIndex = 1, maxShift = 3, blurSigma = 1,
+    rowIndex = 1,
     result = Style["Enter a compiled result row and click Check.", Italic, Gray]
   },
   Column[
@@ -1820,9 +2240,7 @@ displayZNCCChannelRegistrationControl[] := DynamicModule[
       ],
       Grid[
         {
-          {"Compiled row index", InputField[Dynamic[rowIndex], Number, FieldSize -> 8]},
-          {"Search radius", InputField[Dynamic[maxShift], Number, FieldSize -> 8]},
-          {"Blur sigma", InputField[Dynamic[blurSigma], Number, FieldSize -> 8]}
+          {"Compiled row index", InputField[Dynamic[rowIndex], Number, FieldSize -> 8]}
         },
         Alignment -> Left,
         Spacings -> {1.2, 0.7}
@@ -1831,11 +2249,9 @@ displayZNCCChannelRegistrationControl[] := DynamicModule[
         "Check",
         With[
           {
-            idx = If[NumericQ[rowIndex], Round[rowIndex], rowIndex],
-            shift = If[NumericQ[maxShift], Max[0, Round[maxShift]], 3],
-            sigma = If[NumericQ[blurSigma], Max[0, N[blurSigma]], 1]
+            idx = If[NumericQ[rowIndex], Round[rowIndex], rowIndex]
           },
-          result = displayZNCCChannelRegistrationPreview[idx, shift, sigma]
+          result = displayZNCCChannelRegistrationPreview[idx]
         ],
         Method -> "Queued"
       ],
@@ -1846,10 +2262,13 @@ displayZNCCChannelRegistrationControl[] := DynamicModule[
 ];
 
 
-displayZNCCChannelRegistrationPreview[rowIndex_: 1, maxShift_: 3, blurSigma_: 1] := Module[
+displayZNCCChannelRegistrationPreview[rowIndex_: 1, ___] := Module[
   {
-    data, rows, row, headers, pathCols, indexCols, path1, path2, index1, index2,
-    imagePath1, imagePath2, image1, image2, fit, vectorUm
+    data, rows, row, headers, ch1Info, ch2Info, path1, path2, index1, index2,
+    imagePath1, imagePath2, image1, image2,
+    rawVectorXUm, rawVectorYUm, rawScore, vectorXUm, vectorYUm, score,
+    scale, tx, ty, img1, img2, margin, fixed1, fixed2, originalFixed2,
+    shiftOverlay, originalOverlay
   },
   If[
     !TrueQ[doubleChannelEnabled],
@@ -1872,17 +2291,65 @@ displayZNCCChannelRegistrationPreview[rowIndex_: 1, maxShift_: 3, blurSigma_: 1]
       ]
     ]
   ];
-  pathCols = columnPositionsByName[headers, {"KT trackingPureData path"}];
-  indexCols = columnPositionsByName[headers, {"index"}];
-  If[
-    Length[pathCols] < 2 || Length[indexCols] < 2,
-    Return[Style["Required image path or frame-index columns were not found.", Red]]
-  ];
   row = rows[[rowIndex]];
-  path1 = row[[pathCols[[1]]]];
-  path2 = row[[pathCols[[2]]]];
-  index1 = toNumericOrMissing[row[[indexCols[[1]]]]];
-  index2 = toNumericOrMissing[row[[indexCols[[2]]]]];
+  rawVectorXUm = rowValueByHeader[
+    headers,
+    row,
+    {"Ch1/Ch2 ZNCC fitting vector X (um)", "znccFittingVectorX(um)"}
+  ];
+  rawVectorYUm = rowValueByHeader[
+    headers,
+    row,
+    {"Ch1/Ch2 ZNCC fitting vector Y (um)", "znccFittingVectorY(um)"}
+  ];
+  rawScore = rowValueByHeader[
+    headers,
+    row,
+    {"Ch1/Ch2 ZNCC fitting score", "znccFittingScore"}
+  ];
+  If[
+    MatchQ[rawVectorXUm, _Missing] || MatchQ[rawVectorYUm, _Missing],
+    Return[
+      Style[
+        "Stored Ch1/Ch2 ZNCC fitting vector columns were not found in the compiled result table.",
+        Red
+      ]
+    ]
+  ];
+  vectorXUm = toNumericOrMissing[rawVectorXUm];
+  vectorYUm = toNumericOrMissing[rawVectorYUm];
+  score = toNumericOrMissing[rawScore];
+  If[
+    !NumericQ[vectorXUm] || !NumericQ[vectorYUm],
+    Return[
+      Column[
+        {
+          Style[
+            "Stored Ch1/Ch2 ZNCC fitting vector is NA for the selected compiled row. Rerun result extraction after loading the updated script.",
+            Red
+          ],
+          Dataset[
+            {
+              <|
+                "Compiled row index" -> rowIndex,
+                "X (um)" -> displayCellValue[rawVectorXUm],
+                "Y (um)" -> displayCellValue[rawVectorYUm],
+                "Score" -> displayCellValue[rawScore]
+              |>
+            }
+          ]
+        }
+      ]
+    ]
+  ];
+  ch1Info = channelImageInfo[headers, row, 1];
+  ch2Info = channelImageInfo[headers, row, 2];
+  If[
+    !ListQ[ch1Info] || !ListQ[ch2Info],
+    Return[Style["Required image path or frame-index columns were not found in the Ch1/Ch2 blocks.", Red]]
+  ];
+  {path1, index1} = ch1Info;
+  {path2, index2} = ch2Info;
   If[
     !StringQ[path1] || !StringQ[path2] || !NumericQ[index1] || !NumericQ[index2],
     Return[Style["Selected row does not contain valid Ch1/Ch2 image paths and indices.", Red]]
@@ -1906,29 +2373,31 @@ displayZNCCChannelRegistrationPreview[rowIndex_: 1, maxShift_: 3, blurSigma_: 1]
     !ImageQ[image1] || !ImageQ[image2],
     Return[Style["Original image files could not be imported as images.", Red]]
   ];
-  fit = Quiet@Check[
-    TimeConstrained[
-      shiftVector[image1, image2, maxShift, blurSigma],
-      znccPreviewTimeoutSeconds,
-      $Aborted
-    ],
-    $Failed
+  If[ImageDimensions[image1] =!= ImageDimensions[image2],
+    image2 = ImageResize[image2, ImageDimensions[image1]]
   ];
-  If[
-    fit === $Failed || fit === $Aborted || !ListQ[fit] || Length[fit] < 5,
-    Return[Style["ZNCC shift fitting failed for this row.", Red]]
-  ];
-  vectorUm = znccFittingVectorUm[fit];
+  scale = If[NumericQ[znccPixelSizeUm] && znccPixelSizeUm > 0, N[znccPixelSizeUm], 1.];
+  {tx, ty} = N@{-vectorXUm/scale, -vectorYUm/scale};
+  img1 = ColorConvert[ImageAdjust[image1], "Grayscale"];
+  img2 = ColorConvert[ImageAdjust[image2], "Grayscale"];
+  margin = Max[0, Ceiling[Max[Abs /@ {tx, ty}] + 2]];
+  fixed1 = centerCrop[img1, margin];
+  fixed2 = centerCrop[shiftImageSmooth[img2, tx, ty], margin];
+  originalFixed2 = centerCrop[img2, margin];
+  shiftOverlay = overlayCh12[fixed1, fixed2];
+  originalOverlay = overlayCh12[fixed1, originalFixed2];
   Column[
     {
       Style["Compiled-row Ch1/Ch2 ZNCC fitting result", Bold, 16],
       Dataset[{
         <|
           "Compiled row index" -> rowIndex,
-          "Source" -> "Compiled results",
-          "protein1-to-protein2 vector x (um)" -> vectorUm[[1]],
-          "protein1-to-protein2 vector y (um)" -> vectorUm[[2]],
-          "ZNCC score" -> fit[[3]],
+          "Source" -> "Stored allKT/compiled results",
+          "protein1-to-protein2 vector x (um)" -> vectorXUm,
+          "protein1-to-protein2 vector y (um)" -> vectorYUm,
+          "applied image shift x (pixel)" -> tx,
+          "applied image shift y (pixel)" -> ty,
+          "ZNCC score" -> If[NumericQ[score], score, "NA"],
           "Pixel size (um/pixel)" -> znccPixelSizeUm,
           "Ch1 image" -> imagePath1,
           "Ch2 image" -> imagePath2
@@ -1938,8 +2407,8 @@ displayZNCCChannelRegistrationPreview[rowIndex_: 1, maxShift_: 3, blurSigma_: 1]
         {
           Labeled[ImageAdjust[image1], "Ch1"],
           Labeled[ImageAdjust[image2], "Ch2"],
-          Labeled[fit[[5]], "Original overlay"],
-          Labeled[fit[[4]], "Shift-corrected overlay"]
+          Labeled[originalOverlay, "Original overlay"],
+          Labeled[shiftOverlay, "Stored-vector overlay"]
         },
         ImageSize -> 850
       ]
@@ -1985,26 +2454,26 @@ The report shows compiled result tables, a compiled-row Ch1/Ch2 ZNCC fitting
 panel, movement tables, normalized movement tables, and the KT-overlap
 inspection table. The ZNCC panel and the KT-overlap table are separate outputs.
 
-The report includes a Ch1/Ch2 ZNCC fitting check panel. Enter row index,
-maxShift, and blurSigma, then click Check to visually inspect a selected
-compiled row.
+The report includes Ch1/Ch2 ZNCC and intermediate-plot check panels. Enter a
+compiled row index, then click Check to inspect the selected compiled row.
 
-To display a specific row by metadata, run:
+To display intermediate plots for a specific compiled row, run:
 
-  displayIntermediateAnalysisAt[cellIndex, ktPair, kt, time]
+  displayIntermediateAnalysisAtRow[rowIndex]
 
 For example:
 
-  displayIntermediateAnalysisAt[1, 3, 2, 10]
+  displayIntermediateAnalysisAtRow[10]
 
 For an input panel, run:
 
   displayIntermediateAnalysisSelector[]
 
 Use the Ch1/Ch2 ZNCC registration check panel in displayResultExtractionReport[]
-for selected double-channel rows. Enter row index, maxShift, and blurSigma, then
-click Check. Ch1/Ch2 registration does not use the target/background KT signal
-overlap PreSelect flag.
+for selected double-channel rows. The panel reads the stored allKT ZNCC vector
+and score, then applies that stored vector to the overlay display. It does not
+rerun fitting and does not use the target/background KT signal overlap PreSelect
+flag.
 
 Width headers from old CSV files are normalized during column lookup, and
 exported files use:
