@@ -19,19 +19,23 @@ These parameters are defined near the top of `singleImageAnalysis.wl` and `mainp
 | First-derivative smoothing | `d1LowpassThreashold` | `2` | Smoothing parameter for the first derivative used in tail detection. | More smoothing reduces false derivative extrema but can miss weak tails; less smoothing increases sensitivity and noise. | Positive numeric. Tune visually with derivative inspection plots. |
 | Tail derivative threshold, `r` | `d1PeakBackgroundThreasholdRatio` | `0.5` | Threshold for significant extrema in the first derivative relative to background derivative noise. | Lower values call more tails. Higher values reduce false-positive tails but can miss weak tails. | Positive numeric; common range `0.3` to `1.5`. |
 
-## Result-Extraction and Overlap-Filtering Parameters
+## Result-Extraction and Merged-Window Filtering Parameters
 
 These parameters are defined in the Workflow Configuration section of `result_extract.wl`.
 
 | Paper concept or symbol | Code variable | Default | Meaning | Adjustment effect | Recommended user range |
 |---|---:|---:|---|---|---|
 | Movement summary window | `windowSize` | `6` frames | Window length for short-term KT and sister movement SD metrics. | Smaller windows capture short events but are noisier. Larger windows are smoother but less time-local. | Integer `>= 2`; choose based on movie frame rate. |
-| Overlap intensity separation, `p` | `overlapSeparationIntensityThreshold` | `1.7` | Required ratio between high- and low-intensity clusters before overlap filtering is applied. | Lower values flag more possible overlaps and increase sensitivity. Higher values are stricter and reduce false positives. | Paper-defined range `1 < p < 2`; start with `1.7`. |
-| Overlap pixel-area threshold, `q` | `overlapSeparationPixelThreshold` | `60` pixels | Minimum segmented area for a high-intensity timepoint to be called a likely merged-window overlap. | Lower values remove more frames. Higher values keep more frames but may miss real overlaps. | Positive integer. Tune for pixel size and expected KT area. |
-| Parallel tracking-index mapping | `useParallelTrackingIndexMap` | `True` | Enables block-level parallel mapping between KT tracking indices and movie frames. | `True` improves speed on large datasets. `False` is easier to debug and avoids parallel overhead. | `True` or `False`. |
+| Merged-window intensity separation, `p` | `overlapSeparationIntensityThreshold` | `1.7` | Required ratio between high- and low-intensity clusters before merged-window filtering is applied. | Lower values flag more possible merged-window frames and increase sensitivity. Higher values are stricter and reduce false positives. | Paper-defined range `1 < p < 2`; start with `1.7`. |
+| Merged-window pixel-area threshold, `q` | `overlapSeparationPixelThreshold` | `60` pixels | Minimum segmented area for a high-intensity timepoint to be called a likely merged-window frame. | Lower values remove more frames. Higher values keep more frames but may miss real merged-window frames. | Positive integer. Tune for pixel size and expected KT area. |
+| Parallel tracking-index mapping | `useParallelTrackingIndexMap` | `False` | Enables block-level parallel mapping between KT tracking indices and movie frames. | `True` may improve speed on some large datasets but can hang during subkernel launch or heavy file I/O. `False` is more stable for notebook use. | `True` or `False`; start with `False`. |
 | Maximum subkernels for result extraction | `maxParallelKernels` | `8` | Upper limit on kernels used by tracking-index mapping. | Higher can improve speed but uses more memory and CPU. | Integer `1` to available CPU cores. Start with `4` to `8`. |
 | Per-block tracking-index timeout | `trackingIndexTimeoutSeconds` | `300` seconds | Time limit for tracking-index mapping blocks. | Higher allows slow blocks to complete. Lower fails faster if input structure is problematic. | Positive integer. |
 | Close newly launched kernels | `closeLaunchedParallelKernels` | `True` | Closes only subkernels started by this workflow after parallel mapping. | Keep `True` for routine use. Set `False` only when intentionally reusing kernels in the same session. | `True` or `False`. |
+| Export ZNCC fitting values | `exportZNCCFittingResults` | `True` | Adds `znccFittingVectorX(um)`, `znccFittingVectorY(um)`, and `znccFittingScore` to the compiled results table. | Computes the subpixel-refined Ch1/Ch2 fitting vector for each double-channel row. Set `False` for a quick test run; vector columns are then exported as `NA`. This setting is independent from `PreSelect`. | `True` or `False`. |
+| ZNCC pixel size | `znccPixelSizeUm` | `0.046*2 = 0.092` um/pixel | Converts subpixel fitted translations from pixels to micrometers for exported vector columns. | Change only if the acquisition pixel size or binning differs from the default image-analysis setting. | Positive number in um/pixel. |
+| ZNCC subpixel refinement timeout | `znccRefinementTimeoutSeconds` | `5` seconds | Time limit for subpixel refinement within one ZNCC fit. | If refinement times out, the integer-pixel coarse shift is used instead of blocking the notebook. | Positive number; typical range `3` to `10`. |
+| ZNCC preview timeout | `znccPreviewTimeoutSeconds` | `30` seconds | Time limit for one interactive Ch1/Ch2 registration preview. | Prevents a difficult image pair from blocking `displayZNCCChannelRegistrationPreview`. | Positive number; increase only for very large images. |
 
 ## K-K Geometry and Rotation Options
 
@@ -55,13 +59,13 @@ The Ch1/Ch2 vector calculation uses `shiftVector[c1Image, c2Image, maxShift_:3, 
 
 | Paper concept | Code variable or output | Default | Meaning | Adjustment effect | Recommended user range |
 |---|---:|---:|---|---|---|
-| Coarse search window | `maxShift` | `3` pixels | Maximum integer-pixel shift searched in X and Y before subpixel refinement. | Larger values handle bigger channel offsets but increase search area and risk incorrect matches. | Positive integer. Use a value slightly larger than expected channel registration error. |
+| Coarse search radius | `maxShift` | `3` | Maximum integer-offset search radius in X and Y before subpixel refinement. | Larger values handle bigger channel offsets but increase search area and risk incorrect matches. | Positive integer. Use a value slightly larger than expected channel registration error. |
 | Gaussian smoothing before ZNCC | `blurSigma` | `1` pixel | Smooths both channels before ZNCC scoring. | Larger values reduce pixel noise but can blur small offsets. `0` disables smoothing. | Numeric `>= 0`; typical range `0` to `2`. |
 | Edge crop for scoring | `cropMargin` | `Automatic` | Removes edge regions affected by shifting before computing ZNCC. | Larger margins reduce padding artifacts but use fewer pixels. | `Automatic` or non-negative integer. |
 | ZNCC score | `bestScore`, exported as `fitting score` | No fixed default | Similarity score at the selected Ch1/Ch2 shift. | Low scores indicate poor registration or unsuitable images. | Inspect visually; no universal cutoff. |
-| Protein1-to-protein2 vector | `{xShift, yShift}` columns | No fixed default | Estimated displacement between Ch1 and Ch2 in pixels. Convert with `pixelsize` if reporting physical units. | Sign convention follows the code output from the shift fit. Verify with overlay images before final interpretation. | Determined from data. |
+| Protein1-to-protein2 vector | `znccFittingVectorX(um)`, `znccFittingVectorY(um)` | No fixed default | Subpixel-fitted displacement between Ch1 and Ch2, reported in micrometers. The paper-defined vector is the negative of the fitted translation that aligns Ch2 to Ch1. | Sign convention follows the protein1-to-protein2 vector definition; verify with overlay images before final interpretation. | Determined from data. |
 
-This Ch1/Ch2 ZNCC fitting is not the overlap filter. It estimates channel displacement for two-channel vector analysis. Overlap filtering is performed by intensity clustering and pixel-area thresholding.
+This Ch1/Ch2 ZNCC fitting is not the merged-window filter. It estimates channel displacement for two-channel vector analysis. Merged-window filtering is performed by single-channel intensity clustering and pixel-area thresholding.
 
 ## Paper Metrics and Code Outputs
 
@@ -85,10 +89,10 @@ This Ch1/Ch2 ZNCC fitting is not the overlap filter. It estimates channel displa
 | K-K angle | `kkAngle*.csv`, `kkAngleWithFrame*.csv` | Angle used to rotate KT images to the K-K/force axis. |
 | KT movement | `movementDisplacement-*`, `ktMeanSpeed[]`, `ktSDSpeed[]`, `sisterMeanSpeed[]`, `sisterSDSpeed[]` | Frame-to-frame displacement and movement summaries. |
 | Short-window positional SD | `windowSD_Minimum`, `sisterMovingWindowSD2DMinimum`, `windowSize(frames)` | Minimum local XY positional SD over `windowSize` frames. |
-| Overlap intensity separation | `ch1IntensitySeparationRate`, `ch2IntensitySeparationRate` | Ratio between high- and low-intensity clusters within one KT track. |
-| Overlap cluster label | `ch1Classifier`, `ch2Classifier` | Cluster identity after sorting low-intensity group as group 1 and high-intensity group as group 2. |
-| Overlap area separation | `ch1AreaSeparationRate`, `ch2AreaSeparationRate` | Ratio between area statistics for the clustered groups. |
-| Overlap preselection flag | `PreSelect` | `1` marks a likely merged-window overlap frame; `0` keeps the frame. |
+| Merged-window intensity separation | `ch1IntensitySeparationRate`, `ch2IntensitySeparationRate` | Ratio between high- and low-intensity clusters within one KT track. |
+| Merged-window cluster label | `ch1Classifier`, `ch2Classifier` | Cluster identity after sorting low-intensity group as group 1 and high-intensity group as group 2. |
+| Merged-window area separation | `ch1AreaSeparationRate`, `ch2AreaSeparationRate` | Ratio between area statistics for the clustered groups. |
+| Merged-window preselection flag | `PreSelect` | `1` marks a likely merged-window frame; `0` keeps the frame. |
 
 ## Function Reference
 
@@ -99,7 +103,7 @@ This Ch1/Ch2 ZNCC fitting is not the overlap filter. It estimates channel displa
 | `runMainBatchAnalysis[rootDir_:Automatic, OptionsPattern[]]` | `mainprogram.wl` | Finds KT `(+-1)` folders and runs batch image analysis. |
 | `runKKCalculationAndRotation[rootDir_:Automatic, OptionsPattern[]]` | `KKCalculationAndRotation.wl` | Computes K-K geometry and optionally exports rotated central-z KT projections. |
 | `shiftVector[c1Image, c2Image, maxShift_:3, blurSigma_:1, cropMargin_:Automatic]` | `result_extract.wl` | Estimates Ch1/Ch2 displacement by ZNCC registration. |
-| `clusterKTIntensity[singleKTDataset]` | `result_extract.wl` | Computes intensity-cluster and area features used for overlap preselection. |
+| `clusterKTIntensity[singleKTDataset]` | `result_extract.wl` | Computes intensity-cluster and area features used for merged-window preselection. |
 
 ## Batch Options in `mainprogram.wl`
 
@@ -120,7 +124,7 @@ This Ch1/Ch2 ZNCC fitting is not the overlap filter. It estimates channel displa
 4. Tune peak detection next: `peakIntensityThreasholdFactor`, `peakRatioThreashold`.
 5. Tune tail detection with derivative plots: `lowpassThreashold`, `d1LowpassThreashold`, `d1PeakBackgroundThreasholdRatio`.
 6. Run a small batch and inspect CSV plus plots.
-7. Tune overlap filtering after batch extraction: `overlapSeparationIntensityThreshold`, `overlapSeparationPixelThreshold`.
+7. Tune merged-window filtering after batch extraction: `overlapSeparationIntensityThreshold`, `overlapSeparationPixelThreshold`.
 8. Only after QC is stable, process the full dataset with parallel execution.
 
 ## Important Conventions
@@ -129,5 +133,5 @@ This Ch1/Ch2 ZNCC fitting is not the overlap filter. It estimates channel displa
 - `width_X(AUC/max)` corresponds to kinetochore length in the paper.
 - `width_Y(AUC/max)` corresponds to kinetochore width in the paper.
 - `Ch1/Ch2 Shift Fitting` refers to ZNCC channel registration for two-color vector analysis.
-- `Kinetochore Merged-Window Detection` refers to the overlap filter based on intensity clustering and segmented area.
+- `Kinetochore Merged-Window Detection` refers to the single-channel filter based on intensity clustering and segmented area.
 - Several code identifiers preserve historical spellings such as `Threashold`, `Sepration`, and `asymetry`. Do not rename them unless all dependent code is updated together.
