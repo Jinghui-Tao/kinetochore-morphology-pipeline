@@ -25,12 +25,12 @@ Cell[BoxData[{
     RowBox[{"SystemDialogInput", "[", "\"\<FileOpen\>\"", "]"}], "]"}], ";"}], 
   RowBox[{"(*", 
    RowBox[{
-    RowBox[{"select", " ", "the", " ", 
-     RowBox[{"mainprogram", ".", "wl"}], " ", "first"}], ",", " ", 
+    RowBox[{"Load", " ", 
+     RowBox[{"KKCalculationAndRotation", ".", "wl"}]}], ",", " ", 
     RowBox[{
-    "then", " ", "select", " ", "the", " ", "folder", " ", "contains", " ", 
-     "all", " ", "cells", " ", "and", " ", "files", " ", "inside", " ", 
-     "named", " ", "propreply"}]}], "*)"}]}], "\[IndentingNewLine]", 
+    "then", " ", "select", " ", "the", " ", "cell", "-", "set", " ", 
+     "folder", " ", "containing", " ", "all", " ", "cell", " ", 
+     "directories"}]}], "*)"}]}], "\[IndentingNewLine]", 
  RowBox[{"runKKCalculationAndRotation", "[", 
   RowBox[{
    RowBox[{"SystemDialogInput", "[", 

@@ -1,6 +1,6 @@
 (* ::Package:: *)
 
-(* KKCalculationAndRotation_professional.wl
+(* KKCalculationAndRotation.wl
 
    This script computes kinetochore-kinetochore geometry from TrackMate exports,
    writes the angle and distance tables used by downstream analysis, and optionally rotates central-z projection movies by the computed
@@ -21,7 +21,7 @@ ClearAll[
   getIJDims, imagesCZT, centralZRange, zProjectionMovie,
   ktIndexFromFile, readAngles, cleanDirFiles, updateProjectionMetadata,
   exportRotatedFrames, discoverRotationJobs, rotateKTMovie,
-  prepareParallelKernels, mapJobs, runKKCalculationAndRotation,
+  withManagedParallelKernels, mapJobs, runKKCalculationAndRotation,
   $KKCalculationAndRotationVersion
 ];
 
@@ -835,37 +835,48 @@ rotateKTMovie[job_Association, OptionsPattern[]] := Module[
 ];
 
 
-(* Starts additional kernels only when explicit parallel execution is requested. *)
-prepareParallelKernels[kernels_] := Module[{target},
+SetAttributes[withManagedParallelKernels, HoldRest];
+
+withManagedParallelKernels[kernels_, expr_] := Module[
+  {target, before, needed, result},
   target = Replace[kernels, Automatic :> $ProcessorCount];
-  If[IntegerQ[target] && target > 1,
-    While[Length[Kernels[]] < target, LaunchKernels[]]
-  ];
+  If[! IntegerQ[target] || target <= 1, Return[expr]];
+
+  before = Kernels[];
+  needed = Max[0, target - Length[before]];
+  If[needed > 0, Quiet @ Check[LaunchKernels[needed], {}]];
+
+  result = Quiet @ Check[expr, $Failed];
+  Scan[Quiet @ Check[CloseKernels[#], Null] &, Complement[Kernels[], before]];
+  result
 ];
 
 
 (* Maps independent jobs serially or through ParallelMap with shared definitions. *)
 Options[mapJobs] = {"Parallel" -> False, "Kernels" -> Automatic};
 
-mapJobs[items_List, func_, OptionsPattern[]] := Module[{useParallel, kernels},
+mapJobs[items_List, func_, OptionsPattern[]] := Module[{useParallel, kernels, parallelResult},
   useParallel = TrueQ[OptionValue["Parallel"]];
   kernels = OptionValue["Kernels"];
 
   If[useParallel && Length[items] > 1,
-    prepareParallelKernels[kernels];
-    DistributeDefinitions[
-      failureQ, ensureDirectory, safeImport, safeExport, parseNumber,
-      parseTrackLabel, numericSpotQ, trackKey, frameKey, coordinateRow,
-      readTrackMateSpots, readPairLabels, trackLabelToIDMap,
-      groupedSpotsByTrackID, trackFramesAssociation, angleDegrees,
-      vectorRowsForPair, trackRowsWithFrames, movementDistances,
-      angleRowsForTrackFrames, kkCorrelationForPair, buildPairMetrics,
-      resolvePairTrackIDs, pairMetricStatus, safeBuildPairMetrics, diagnoseKKCell, pairDirectory, exportPairMetricsForChannel, processKKCell,
-      getIJDims, imagesCZT, centralZRange, zProjectionMovie,
-      ktIndexFromFile, readAngles, cleanDirFiles, updateProjectionMetadata,
-      exportRotatedFrames, discoverRotationJobs, rotateKTMovie
+    parallelResult = withManagedParallelKernels[
+      kernels,
+      DistributeDefinitions[
+        failureQ, ensureDirectory, safeImport, safeExport, parseNumber,
+        parseTrackLabel, numericSpotQ, trackKey, frameKey, coordinateRow,
+        readTrackMateSpots, readPairLabels, trackLabelToIDMap,
+        groupedSpotsByTrackID, trackFramesAssociation, angleDegrees,
+        vectorRowsForPair, trackRowsWithFrames, movementDistances,
+        angleRowsForTrackFrames, kkCorrelationForPair, buildPairMetrics,
+        resolvePairTrackIDs, pairMetricStatus, safeBuildPairMetrics, diagnoseKKCell, pairDirectory, exportPairMetricsForChannel, processKKCell,
+        getIJDims, imagesCZT, centralZRange, zProjectionMovie,
+        ktIndexFromFile, readAngles, cleanDirFiles, updateProjectionMetadata,
+        exportRotatedFrames, discoverRotationJobs, rotateKTMovie
+      ];
+      ParallelMap[func, items]
     ];
-    ParallelMap[func, items],
+    If[parallelResult === $Failed, Map[func, items], parallelResult],
     Map[func, items]
   ]
 ];
@@ -956,7 +967,7 @@ runKKCalculationAndRotation[rootDir_: Automatic, OptionsPattern[]] := Module[
 
 (* Usage examples:
 
-   Get["path/to/KKCalculationAndRotation_professional.wl"];
+   Get["path/to/KKCalculationAndRotation.wl"];
 
    runKKCalculationAndRotation[]
 

@@ -10,10 +10,10 @@
 NotebookFileLineBreakTest
 NotebookFileLineBreakTest
 NotebookDataPosition[       154,          7]
-NotebookDataLength[      2377,         69]
-NotebookOptionsPosition[      1924,         54]
-NotebookOutlinePosition[      2329,         70]
-CellTagsIndexPosition[      2286,         67]
+NotebookDataLength[      2282,         70]
+NotebookOptionsPosition[      1830,         55]
+NotebookOutlinePosition[      2234,         71]
+CellTagsIndexPosition[      2191,         68]
 WindowFrame->Normal*)
 
 (* Beginning of Notebook Content *)
@@ -25,23 +25,24 @@ Cell[BoxData[{
     RowBox[{"SystemDialogInput", "[", "\"\<FileOpen\>\"", "]"}], "]"}], ";"}], 
   RowBox[{"(*", 
    RowBox[{
-    RowBox[{"select", " ", "the", " ", 
-     RowBox[{"mainprogram", ".", "wl"}], " ", "first"}], ",", " ", 
+    RowBox[{"Load", " ", 
+     RowBox[{"mainprogram", ".", "wl"}]}], ",", " ", 
     RowBox[{
-    "then", " ", "select", " ", "the", " ", "folder", " ", "contains", " ", 
-     "all", " ", "cells", " ", "and", " ", "files", " ", "inside", " ", 
-     "named", " ", "propreply"}]}], "*)"}]}], "\n", 
+    "then", " ", "select", " ", "the", " ", "cell", "-", "set", " ", "folder",
+      " ", "containing", " ", "all", " ", "cell", " ", "directories"}]}], 
+   "*)"}]}], "\n", 
  RowBox[{
   RowBox[{"batch", "=", 
    RowBox[{"runMainBatchAnalysis", "[", "]"}]}], ";"}], "\[IndentingNewLine]", 
  RowBox[{
   RowBox[{"(*", 
    RowBox[{
-    RowBox[{"It", " ", "may", " ", "take", " ", "a", " ", "while"}], ",", 
     RowBox[{
-     RowBox[{"but", " ", "should", " ", "be"}], " ", "<", " ", 
-     RowBox[{"5", "mins", " ", "per", " ", "test", " ", 
-      RowBox[{"cell", "."}]}]}]}], "*)"}]}]}], "Input",
+    "Runtime", " ", "depends", " ", "on", " ", "image", " ", "count"}], ",", 
+    " ", 
+    RowBox[{
+    "selected", " ", "options", ",", " ", "and", " ", "available", " ", 
+     "kernels"}]}], "*)"}]}]}], "Input",
  CellChangeTimes->{{3.9894231818741646`*^9, 3.9894231818741646`*^9}, {
   3.9894232302384357`*^9, 3.989423306014389*^9}, {3.9894234154179993`*^9, 
   3.98942348937871*^9}, {3.989431077414503*^9, 
@@ -52,8 +53,8 @@ Cell[BoxData[""], "Input",
  CellChangeTimes->{{3.9894231891311607`*^9, 3.9894232145474586`*^9}},
  CellLabel->"In[69]:=",ExpressionUUID->"fed8810f-5540-7343-950a-ad6170062b88"]
 },
-WindowSize->{1440, 741.75},
-WindowMargins->{{1222.8, Automatic}, {Automatic, -6}},
+WindowSize->{1428, 735.75},
+WindowMargins->{{1228.8, Automatic}, {Automatic, 0}},
 FrontEndVersion->"14.3 for Microsoft Windows (64-bit) (July 8, 2025)",
 StyleDefinitions->"Default.nb",
 ExpressionUUID->"99193c72-3893-1142-b8c0-69bfce8b36c8"
@@ -69,9 +70,11 @@ CellTagsIndex->{}
 *)
 (*NotebookFileOutline
 Notebook[{
-Cell[554, 20, 1188, 28, 85, "Input",ExpressionUUID->"47670873-8206-bc4a-8707-076fbb71f6c1"],
-Cell[1745, 50, 175, 2, 28, "Input",ExpressionUUID->"fed8810f-5540-7343-950a-ad6170062b88"]
+Cell[554, 20, 1094, 29, 85, "Input",ExpressionUUID->"47670873-8206-bc4a-8707-076fbb71f6c1"],
+Cell[1651, 51, 175, 2, 28, "Input",ExpressionUUID->"fed8810f-5540-7343-950a-ad6170062b88"]
 }
 ]
 *)
+
+(* End of internal cache information *)
 

@@ -9,7 +9,7 @@ This script measures kinetochore dimensions, intensity peaks, asymmetry, and
 projection-based width from every cropped KT image folder in a selected cell set.
 Each KT folder is analyzed independently and exports a per-KT CSV plus inspection
 images. The batch runner processes KT folders in controlled chunks so kernels are
-not repeatedly restarted inside the task loop.
+started and closed only by the batch runner when parallel execution is requested.
 *)
 
 
@@ -22,6 +22,7 @@ ClearAll[
   allAnalysis, runMainBatchAnalysis, analyzeKTImageDirectory,
   discoverKTImageDirectories, sortImageNames, safeAnalyzeImage,
   safeImportImage, ensureDirectory, safeExport, ktOutputStem,
+  withManagedParallelKernels,
   listPixelsToum, pointsPixelsToum, analysisHeaders,
   pixelsize, backgroundSeprationFactor, smallNoiseComponentSize,
   boundaryDilation, peakIntensityThreasholdFactor, peakRatioThreashold,
@@ -466,6 +467,22 @@ discoverKTImageDirectories[rootDir_String] := Module[
   Select[imageDirs, DirectoryQ]
 ];
 
+SetAttributes[withManagedParallelKernels, HoldRest];
+
+withManagedParallelKernels[desired_, expr_] := Module[
+  {target, before, needed, result},
+  target = Replace[desired, Automatic :> $ProcessorCount];
+  If[! IntegerQ[target] || target <= 1, Return[expr]];
+
+  before = Kernels[];
+  needed = Max[0, target - Length[before]];
+  If[needed > 0, Quiet @ Check[LaunchKernels[needed], {}]];
+
+  result = Quiet @ Check[expr, $Failed];
+  Scan[Quiet @ Check[CloseKernels[#], Null] &, Complement[Kernels[], before]];
+  result
+];
+
 Options[runMainBatchAnalysis] = {
   "Kernels" -> Automatic,
   "ChunkSize" -> Automatic,
@@ -494,30 +511,39 @@ runMainBatchAnalysis[rootDir_: Automatic, OptionsPattern[]] := Module[
   todo = Complement[ktImgDirs, finished];
 
   kernels = Replace[OptionValue["Kernels"], Automatic :> Max[1, Min[$ProcessorCount - 1, 6]]];
+  If[! IntegerQ[kernels] || kernels < 1, kernels = 1];
   chunkSize = Replace[OptionValue["ChunkSize"], Automatic :> Max[1, 4*kernels]];
   chunks = Partition[todo, UpTo[chunkSize]];
 
   Do[
     If[kernels > 1,
-      CloseKernels[];
-      LaunchKernels[kernels];
-      If[KeyExistsQ[Association@SystemOptions[], "EvaluateInFrontEnd"], SetSystemOptions["EvaluateInFrontEnd" -> False]];
-      DistributeDefinitions[
-        allAnalysis, analyzeKTImageDirectory, sortImageNames, safeAnalyzeImage,
-        safeImportImage, safeExport, ensureDirectory, ktOutputStem, listPixelsToum,
-        pointsPixelsToum, analysisHeaders, pixelsize, backgroundSeprationFactor,
-        smallNoiseComponentSize, boundaryDilation, peakIntensityThreasholdFactor,
-        peakRatioThreashold, contours, lowpassThreashold, d1LowpassThreashold,
-        d1PeakBackgroundThreasholdRatio
+      chunkResults = withManagedParallelKernels[
+        kernels,
+        If[KeyExistsQ[Association@SystemOptions[], "EvaluateInFrontEnd"], SetSystemOptions["EvaluateInFrontEnd" -> False]];
+        DistributeDefinitions[
+          allAnalysis, analyzeKTImageDirectory, sortImageNames, safeAnalyzeImage,
+          safeImportImage, safeExport, ensureDirectory, ktOutputStem, listPixelsToum,
+          pointsPixelsToum, analysisHeaders, pixelsize, backgroundSeprationFactor,
+          smallNoiseComponentSize, boundaryDilation, peakIntensityThreasholdFactor,
+          peakRatioThreashold, contours, lowpassThreashold, d1LowpassThreashold,
+          d1PeakBackgroundThreasholdRatio
+        ];
+        ParallelMap[
+          analyzeKTImageDirectory[#, "ExportPlots" -> OptionValue["ExportPlots"],
+            "PerImageTimeout" -> OptionValue["PerImageTimeout"],
+            "PerImageMemoryLimit" -> OptionValue["PerImageMemoryLimit"]]&,
+          chunk,
+          Method -> "CoarsestGrained"
+        ]
       ];
-      chunkResults = ParallelMap[
-        analyzeKTImageDirectory[#, "ExportPlots" -> OptionValue["ExportPlots"],
-          "PerImageTimeout" -> OptionValue["PerImageTimeout"],
-          "PerImageMemoryLimit" -> OptionValue["PerImageMemoryLimit"]]&,
-        chunk,
-        Method -> "CoarsestGrained"
-      ];
-      CloseKernels[],
+      If[chunkResults === $Failed,
+        chunkResults = Map[
+          analyzeKTImageDirectory[#, "ExportPlots" -> OptionValue["ExportPlots"],
+            "PerImageTimeout" -> OptionValue["PerImageTimeout"],
+            "PerImageMemoryLimit" -> OptionValue["PerImageMemoryLimit"]]&,
+          chunk
+        ]
+      ],
 
       chunkResults = Map[
         analyzeKTImageDirectory[#, "ExportPlots" -> OptionValue["ExportPlots"],
