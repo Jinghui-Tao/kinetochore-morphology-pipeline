@@ -396,8 +396,6 @@ curveFun=Interpolation[curveForPlot,InterpolationOrder->3];
 
 peakPtsNorm=({#[[1]]*pixelsize,curveFun[#[[1]]*pixelsize]}&/@peaksForPlot);
 
-(*red derivative curve:exactly the normalized curve used for plotting*)d1CurveNorm=LowpassFilter[d1List[intensityCurveToPlot],d1LowpassThreashold]/normFactor;
-
 d1CurveNorm=LowpassFilter[d1List[intensityCurveToPlot],d1LowpassThreashold]/normFactor;
 
 d1CurveNormPlot=listPixelsToum[d1CurveNorm];
@@ -417,17 +415,8 @@ showAllD1Peaks=Show[ListPlot[listPixelsToum[d1List[intensityCurveToPlot]/normFac
 measuredLength=widthXResult;
 scaleBarPixels=1/pixelsize;
 
-
+(*Result list:"ktArea(pixels)","width_X(AUC/max)(\[Micro]m)","width_Y(AUC/max)(\[Micro]m)","orientationAngle(deg)","elongationRatioResult","semiaxesRatioResult","tail or not","tail direction","tail length(\[Micro]m)","asymmetryResult","x_1st peak intensity","x_2nd peak intensity","x_valley intensity","Xproj_peak number","y_1st peak intensity","y_2nd peak intensity","y_valley intensity","Yproj_peak number","2D 1st peak intensity","2D 2nd peak intensity","2D peak dist X(\[Micro]m)","2D peak dist Y(\[Micro]m)","number of 2D peaks","ratio 2nd/1st peak","totalIntensity"*)
 d1ExtremaPtsPlot=ListPlot[d1PtsNorm,PlotStyle->Directive[Purple,AbsolutePointSize[12]],PlotRange->All];
-
-(*Show derivative extrema as gray vertical guide lines for visual reference.*)
-linePlotWithGridLines=Show[showIntensityPeaks,showAllD1Peaks,GridLines->{Transpose[allD1PeaksAndValleys][[1]]*pixelsize,{}},GridLinesStyle->Directive[GrayLevel[0.65],AbsoluteThickness[2]],PlotRange->All,Evaluate@commonStyle];
-
-(*Show derivative extrema as purple points on the derivative curve.*)
-linePlotWithPurplePts=Show[showIntensityPeaks,showAllD1Peaks,d1ExtremaPtsPlot,PlotRange->All,Evaluate@commonStyle];
-
-(*Result list:"ktArea(pixels)","width_Y(AUC/max)(\[Micro]m)","width_Y(AUC/max)(\[Micro]m)","orientationAngle(deg)","elongationRatioResult","semiaxesRatioResult","tail or not","tail direction","tail length(\[Micro]m)","asymmetryResult","x_1st peak intensity","x_2nd peak intensity","x_valley intensity","Xproj_peak number","y_1st peak intensity","y_2nd peak intensity","y_valley intensity","Yproj_peak number","2D 1st peak intensity","2D 2nd peak intensity","2D peak dist X(\[Micro]m)","2D peak dist Y(\[Micro]m)","number of 2D peaks","ratio 2nd/1st peak","totalIntensity"*)
-	d1ExtremaPtsPlot=ListPlot[d1PtsNorm,PlotStyle->Directive[Purple,AbsolutePointSize[12]],PlotRange->All];
 
 linePlotWithGridLines=Show[showIntensityPeaks,showAllD1Peaks,GridLines->{d1ExtremaX*pixelsize,{}},GridLinesStyle->Directive[GrayLevel[0.65],AbsoluteThickness[2]],PlotRange->All,Evaluate@commonStyle];
 
@@ -445,7 +434,7 @@ If[Length[peakIntensities]>1,(peakIntensities[[2]]-meanBackground)/(peakIntensit
 totalIntensity
 },
 
-(*Plots*)
+(*Inspection plots.*)
 {Show[showAllPeaksContours[[1]],ImageSize->350,ImageResolution->500],Show[showAllPeaks,ImageSize->350,ImageResolution->500,Epilog->{White,Thickness[0.03],Line[{{1,1},{1+scaleBarPixels,1}}]}],Show[highlightedImg,ImageSize->350,ImageResolution->500,Epilog->{White,Thickness[0.03],Line[{{1,1},{1+scaleBarPixels,1}}]}],Show[linePlotWithGridLines,ImageSize->350,ImageResolution->500],Show[linePlotWithPurplePts,ImageSize->350,ImageResolution->500]}}]
 ],{{"NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA","NA"}}]]
 
