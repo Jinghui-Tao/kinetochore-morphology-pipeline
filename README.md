@@ -13,6 +13,9 @@ This pipeline quantifies kinetochore morphology from live-cell fluorescence movi
 | `runSingleImageAnalysis.nb` | Notebook wrapper for one-image testing. |
 | `runMainprogram.nb` | Notebook wrapper for batch KT image analysis. |
 | `runKKCalculationRotation.nb` | Notebook wrapper for K-K calculation and rotation. |
+| `PROTOCOL.md` | Step-by-step GitHub-ready protocol from TrackMate tracking through result extraction and QC. |
+
+For a full operational workflow, see [`PROTOCOL.md`](PROTOCOL.md).
 
 ## Required Inputs
 
