@@ -42,7 +42,8 @@ Each cell folder should contain:
 | Raw or preprocessed 4D movie files | Yes | TIFF files should retain metadata for channel, z-slice, frame number, and pixel calibration. |
 | `export.csv` | Yes | TrackMate export containing spot IDs, track labels, frame numbers, and XYZ coordinates. |
 | `pairs.xlsx` or `Pairs.xlsx` | Yes | Manually curated sister-pair table using numeric TrackMate labels. For example, `track_125` should be entered as `125`. |
-| Channel folders such as `ch1` and `ch2` | Yes | Use one channel for single-channel datasets and two channels for double-channel datasets. |
+| Split channel folders such as `ch1` and `ch2` | Yes | Double-channel datasets must use split per-channel movies. Do not track each channel independently. |
+| Per-channel KT track stacks | Yes | Each accepted KT should have track stacks exported separately from each channel using the same track identity and frame sequence. |
 
 Recommended structure:
 
@@ -53,8 +54,10 @@ experiment_root/
     pairs.xlsx
     ch1/
       movie_or_kt_files.tif
+      per_kt_track_stacks/
     ch2/
       movie_or_kt_files.tif
+      per_kt_track_stacks/
   cell_002/
     export.csv
     pairs.xlsx
@@ -73,13 +76,23 @@ Before TrackMate tracking:
    - pixel height
    - z-step size
    - time interval
-2. Use the channel intended for tracking. Avoid tracking on unnecessary channels because extra channels can increase ambiguity and processing time.
-3. Crop movies to a region that contains the cell and relevant kinetochores. Smaller movies reduce tracking and batch-processing time.
-4. If needed for easier manual curation, rotate the field so the pole-to-pole axis is approximately horizontal before tracking. Keep a record of any preprocessing applied before TrackMate.
+2. Split multi-channel movies into per-channel movies before TrackMate processing.
+3. Choose one reference channel for tracking. This should usually be the channel with clearer KT signal, higher signal-to-noise ratio, and more stable KT localization.
+4. Crop movies to a region that contains the cell and relevant kinetochores. Smaller movies reduce tracking and batch-processing time.
+5. If needed for easier manual curation, rotate the field so the pole-to-pole axis is approximately horizontal before tracking. Keep a record of any preprocessing applied before TrackMate.
 
 ## Step 2. Track Kinetochores in TrackMate
 
 Use TrackMate in Fiji/ImageJ to track kinetochores in 3D over time.
+
+For double-channel datasets, tracking identity must be shared across channels:
+
+1. Split the raw movie into Ch1 and Ch2 movies.
+2. Run TrackMate only on the chosen reference channel.
+3. Save the TrackMate model and export the reference-channel track table as `export.csv`.
+4. Open the other channel movie and load, merge, or otherwise apply the same generated TrackMate tracks to that channel.
+5. Verify that track labels, frame numbers, and KT identities match between channels.
+6. Do not independently detect and track Ch1 and Ch2. Independent tracking can create inconsistent KT labels, missing frames, or mismatched protein1/protein2 measurements.
 
 Recommended tracking checks:
 
@@ -102,6 +115,23 @@ Example TrackMate detector and tracker panels are shown below for orientation. T
 After tracking, use the TrackMate table export to save the tracking table as CSV. The pipeline expects TrackMate labels, track IDs, frame numbers, and XYZ coordinates to be present in `export.csv`.
 
 ![Example TrackMate CSV export table](docs/images/trackmate-export-csv.png)
+
+### Export Per-Channel KT Track Stacks
+
+After the shared tracks have been created and applied to each channel, export track stacks separately from every channel.
+
+For each accepted KT track:
+
+1. Select one spot from the target track in TrackMate.
+2. Use `Extract track stack` to export the KT-centered image stack.
+3. Repeat the export for each KT in the reference channel.
+4. Open the matched second-channel movie with the same TrackMate tracks loaded.
+5. Export the corresponding track stack for the same KT label from the second channel.
+6. Keep track labels, frame order, z-selection, crop radius, and folder naming consistent across channels.
+
+For double-channel datasets, every analyzed KT should therefore have matched Ch1 and Ch2 track stacks. These matched per-channel stacks are required so morphology measurements and Ch1/Ch2 ZNCC vector fitting refer to the same kinetochore identity and timepoint.
+
+![Example TrackMate extract-track-stack action](docs/images/trackmate-extract-track-stack.png)
 
 ## Step 3. Curate Sister KT Pairs
 
