@@ -2,6 +2,8 @@
 
 This pipeline quantifies kinetochore morphology from live-cell fluorescence movies. It combines TrackMate-based tracking, manually curated sister-pair information, K-K-axis rotation, per-kinetochore image analysis, movement summaries, and target/background KT signal overlap filtering.
 
+doi: https://doi.org/10.64898/2026.05.26.727517
+
 ## Files
 
 | File | Purpose |
