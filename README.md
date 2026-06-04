@@ -1,6 +1,6 @@
 # Kinetochore Morphology Analysis Pipeline
 
-This pipeline quantifies kinetochore morphology from live-cell fluorescence movies. It combines TrackMate-based tracking, manually curated sister-pair information, K-K-axis rotation, per-kinetochore image analysis, movement summaries, and merged-window filtering.
+This pipeline quantifies kinetochore morphology from live-cell fluorescence movies. It combines TrackMate-based tracking, manually curated sister-pair information, K-K-axis rotation, per-kinetochore image analysis, movement summaries, and target/background KT signal overlap filtering.
 
 ## Files
 
@@ -9,7 +9,7 @@ This pipeline quantifies kinetochore morphology from live-cell fluorescence movi
 | `KKCalculationAndRotation.wl` | Reads TrackMate `export.csv` and `pairs.xlsx`, computes K-K vectors, K-K distance, K-K angle, and optionally exports rotated central-z KT projections. |
 | `mainprogram.wl` | Batch analysis of cropped/rotated KT images. Exports one CSV per KT and inspection plots. |
 | `singleImageAnalysis.wl` | Interactive analysis of one image. Useful for parameter tuning and visual inspection. |
-| `result_extract.wl` | Combines per-KT CSVs, K-K/movement outputs, Ch1/Ch2 information, and merged-window filtering into experiment-level result tables. |
+| `result_extract.wl` | Combines per-KT CSVs, K-K/movement outputs, Ch1/Ch2 information, and target/background KT signal overlap filtering into experiment-level result tables. |
 | `runSingleImageAnalysis.nb` | Notebook wrapper for one-image testing. |
 | `runMainprogram.nb` | Notebook wrapper for batch KT image analysis. |
 | `runKKCalculationRotation.nb` | Notebook wrapper for K-K calculation and rotation. |
@@ -129,9 +129,9 @@ script = SystemDialogInput["FileOpen", WindowTitle -> "Select result_extract.wl"
 If[script =!= $Canceled, Get[script]];
 ```
 
-Set `configuredChannelNumber` in `result_extract.wl` before running. The script asks for the root folder, then combines per-KT measurements with K-K distance, movement metrics, Ch1/Ch2 ZNCC fitting vectors, and merged-window filtering.
+Set `configuredChannelNumber` in `result_extract.wl` before running. The script asks for the root folder, then combines per-KT measurements with K-K distance and movement metrics. Double-channel ZNCC vector fitting and target/background KT signal overlap filtering are separate result modules.
 
-For double-channel data, `exportZNCCFittingResults = True` adds `znccFittingVectorX(um)`, `znccFittingVectorY(um)`, and `znccFittingScore` to `Compiled results` and to `YYYY-MM-DDallKT.csv`. The fitted vector is subpixel-refined, converted to micrometers with `znccPixelSizeUm`, and is independent from the merged-window `PreSelect` flag. For a quick test run, set `exportZNCCFittingResults = False`; the vector columns will be exported as `NA`.
+For double-channel data, `exportZNCCFittingResults = True` adds `znccFittingVectorX(um)`, `znccFittingVectorY(um)`, and `znccFittingScore` to `Compiled results` and to `YYYY-MM-DDallKT.csv`. The fitted vector is subpixel-refined and converted to micrometers with `znccPixelSizeUm`. ZNCC vector fitting does not read, write, filter by, or depend on the KT-overlap `PreSelect` flag. For a quick test run, set `exportZNCCFittingResults = False`; the vector columns will be exported as `NA`.
 
 `displayResultExtractionReport[]` shows the compiled table with the ZNCC vector columns, plus a Ch1/Ch2 ZNCC fitting check panel for visual inspection of a selected compiled row.
 
@@ -142,9 +142,9 @@ Main outputs:
 | `YYYY-MM-DDallKT.csv` | Combined per-frame KT morphology table. Double-channel runs include subpixel ZNCC fitting vector columns in micrometers. |
 | `YYYY-MM-DDMovement_condition1.csv` | Per-KT movement and morphology summary. |
 | `YYYY-MM-DDNormalized_of_YYYY-MM-DDMovement.csv` | Movement table normalized within KT groups. |
-| `YYYY-MM-DDallKT_PreSelectMark.csv` | Combined table with merged-window preselection features and `PreSelect` flag. |
-| `YYYY-MM-DDallKT_filtered.csv` | `allKT` table with likely merged-window frames removed. |
-| `YYYY-MM-DDextract_PreSelectMark.csv` | Extract table with merged-window `PreSelect` flag and optional Ch1/Ch2 registration columns. |
+| `YYYY-MM-DDallKT_PreSelectMark.csv` | Combined table with target/background KT signal overlap preselection features and `PreSelect` flag. |
+| `YYYY-MM-DDallKT_filtered.csv` | `allKT` table with likely target/background KT-overlap frames removed. |
+| `YYYY-MM-DDextract_PreSelectMark.csv` | Extract table with target/background KT signal overlap `PreSelect` flag. |
 | `YYYY-MM-DDextract_filtered.csv` | Final filtered extract table. |
 
 ## Output Metrics
@@ -181,14 +181,14 @@ Use `singleImageAnalysis.wl` first on representative images from each imaging co
 | True secondary peaks are missed | Decrease `peakIntensityThreasholdFactor` or `peakRatioThreashold`. |
 | Tail calls are too frequent | Increase `d1PeakBackgroundThreasholdRatio` or adjust smoothing. |
 | Weak tails are missed | Decrease `d1PeakBackgroundThreasholdRatio` or adjust smoothing. |
-| Merged-window filter removes too many frames | Increase `overlapSeparationIntensityThreshold` or `overlapSeparationPixelThreshold`. |
-| Merged-window filter misses obvious merged KT windows | Decrease `overlapSeparationIntensityThreshold` or `overlapSeparationPixelThreshold`. |
+| KT-overlap filter removes too many frames | Increase `overlapSeparationIntensityThreshold` or `overlapSeparationPixelThreshold`. |
+| KT-overlap filter misses obvious target/background KT signal overlap | Decrease `overlapSeparationIntensityThreshold` or `overlapSeparationPixelThreshold`. |
 
 ## Notes
 
 - `pixelsize` must be set correctly before analysis. It controls all micrometer-scale length outputs.
 - The code keeps several historical variable names such as `Threashold`, `Sepration`, and `asymetry`. Treat these as code identifiers, not spelling guidance for manuscripts or figures.
-- Merged-window filtering is a single-channel intensity/area QC step for frames where two nearby KT signals may have been detected as one window.
-- Ch1/Ch2 channel overlay and ZNCC registration are two-channel checks for the relative position of the two protein labels. They are separate from merged-window filtering.
+- Target/background KT signal overlap filtering is a single-channel intensity/area QC step for frames where background or neighboring kinetochore signal overlaps the target KT signal.
+- Ch1/Ch2 channel overlay and ZNCC registration are two-channel measurements for the relative position of the two protein labels. They are a separate module and do not use the target/background KT signal overlap filter.
 - Parallel execution is optional. Result extraction uses serial tracking-index mapping by default for stability; set `useParallelTrackingIndexMap = True` only after a small serial test run completes normally.
 - Keep the original TrackMate exports and pair files unchanged. The scripts write derived outputs into channel, pair, KT, and experiment folders.
